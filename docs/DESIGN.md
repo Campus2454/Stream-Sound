@@ -66,15 +66,20 @@ the bottom for ~3 s.
 
 ### Settings
 
-1. "โหมดความหน่วง": three stacked option cards (เกม / สมดุล / ฟังเพลง) with
+1. "โหมดเสียง": three stacked option cards (เกม / สมดุล / ฟังเพลง) with
    their one-line hint; the selected card has a red border and dot.
 2. "เครื่องนี้": editable device name, this device's IPs (tap to copy).
 3. "เพิ่มเครื่องด้วย IP": field + add button, list with remove.
-4. "การแสดงผล": visualizer style ความถี่ (bars) / คลื่นเสียง (waveform).
-5. Platform options: desktop "เปิดรับเสียงอัตโนมัติเมื่อเปิดแอป"; phone
-   "ให้จอเปิดค้างระหว่างสตรีม".
-6. "อัปเดต": build number, status line, "ตรวจสอบอัปเดต".
-7. Phone only: "ปิดแอปและหยุดทั้งหมด".
+4. "ทั่วไป": visualizer style แท่งความถี่ (bars) / คลื่นเสียง (waveform) as a
+   segmented control, then switches: "เปิดรับเสียงทันทีเมื่อเปิดแอป" (all) and
+   "ให้จอเปิดค้างระหว่างสตรีม" (phones).
+5. "อัปเดต": build number, status line, "ตรวจสอบอัปเดต".
+6. Phone only: "ปิดแอปและหยุดทั้งหมด" (outlined, error-coloured text).
+
+Everything the user picks (targets, source, volume, mode, style, typed IPs,
+name) is saved and restored on the next launch. Targets are remembered by
+"ip:port"; a remembered target that isn't around shows "ไม่พบในเครือข่ายตอนนี้"
+so it can still be unticked. An avatar for an address shows "IP".
 
 ## Visualizer
 

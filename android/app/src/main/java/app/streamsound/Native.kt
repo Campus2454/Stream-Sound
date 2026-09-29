@@ -36,6 +36,13 @@ object Native {
     external fun setVolume(handle: Long, volume: Float)
     external fun setMode(handle: Long, mode: String)
 
+    /**
+     * Visualizer data, one 0..1 value per element of [out]. [tap] 0 = sending,
+     * 1 = playing; [kind] 0 = waveform (last 2 s), 1 = spectrum. False when idle.
+     */
+    external fun scope(handle: Long, tap: Int, kind: Int, out: FloatArray): Boolean
+    external fun setName(handle: Long, name: String)
+
     /** Snapshot of peers, incoming streams and sender status as JSON. */
     external fun stateJson(handle: Long): String
 }
