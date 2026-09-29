@@ -36,7 +36,7 @@ pub struct Discovery {
 
 pub struct Announce {
     pub id: String,
-    pub name: String,
+    pub name: Arc<parking_lot::RwLock<String>>,
     pub audio_port: u16,
     pub receiving: Arc<AtomicBool>,
 }
@@ -123,7 +123,7 @@ impl Discovery {
                     let msg = format!(
                         "SSND1|{}|{}|{}|{}",
                         me.id,
-                        me.name.replace('|', " "),
+                        me.name.read().replace('|', " "),
                         me.audio_port,
                         me.receiving.load(Ordering::Relaxed) as u8
                     );

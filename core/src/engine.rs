@@ -6,6 +6,7 @@ use crate::capture::{self, CaptureHandle, CaptureOptions, Source};
 use crate::discovery::{Announce, Discovery, Peer};
 use crate::jitter::{Mixer, Mode, StreamBuffer, StreamEntry, StreamStats};
 use crate::proto::*;
+use crate::scope::{Snapshot as ScopeSnapshot, Tap};
 use anyhow::Context;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -90,7 +91,7 @@ impl Renderer {
 
 pub struct Engine {
     pub id: String,
-    pub name: String,
+    name: Arc<RwLock<String>>,
     pub audio_port: u16,
     discovery: Option<Discovery>,
     receiving_flag: Arc<AtomicBool>,
@@ -119,10 +120,11 @@ impl Engine {
     pub fn new(cfg: EngineConfig) -> Engine {
         let id = format!("{:08x}", random_u32());
         let receiving_flag = Arc::new(AtomicBool::new(false));
+        let name = Arc::new(RwLock::new(cfg.name));
         let discovery = if cfg.discovery {
             Discovery::start(Announce {
                 id: id.clone(),
-                name: cfg.name.clone(),
+                name: name.clone(),
                 audio_port: cfg.audio_port,
                 receiving: receiving_flag.clone(),
             })
@@ -132,7 +134,7 @@ impl Engine {
         };
         Engine {
             id,
-            name: cfg.name,
+            name,
             audio_port: cfg.audio_port,
             discovery,
             receiving_flag,
@@ -232,6 +234,28 @@ impl Engine {
         self.mixer.lock().volume = v.clamp(0.0, 2.0);
     }
 
+    /// This device's name as other devices see it.
+    pub fn name(&self) -> String {
+        self.name.read().clone()
+    }
+
+    /// Rename this device; others see the new name within a second.
+    pub fn set_name(&self, name: &str) {
+        let name = name.trim();
+        if !name.is_empty() {
+            *self.name.write() = name.chars().take(60).collect();
+        }
+    }
+
+    /// Recent audio on one side for drawing a waveform or frequency bars;
+    /// `None` while that side is off.
+    pub fn scope(&self, tap: Tap) -> Option<ScopeSnapshot> {
+        match tap {
+            Tap::Send => self.sender.as_ref().map(|s| s.packetizer.lock().scope.snapshot()),
+            Tap::Receive => self.receiver.as_ref().map(|_| self.mixer.lock().scope.snapshot()),
+        }
+    }
+
     /// Something an audio callback the app owns (Android's AAudio player)
     /// can pull mixed audio from without going through the engine.
     pub fn renderer(&self) -> Renderer {
@@ -265,10 +289,11 @@ impl Engine {
     pub fn start_sending(&mut self, source: Source, dests: Vec<SocketAddr>, keep_local: bool) -> anyhow::Result<()> {
         self.stop_sending();
         *self.send_dests.write() = dests;
+        let me = self.name();
         let name = match &source {
-            Source::App { key } => format!("{} · {}", self.name, key),
-            Source::Input { name } => format!("{} · {}", self.name, name),
-            _ => self.name.clone(),
+            Source::App { key } => format!("{me} · {key}"),
+            Source::Input { name } => format!("{me} · {name}"),
+            _ => me,
         };
         self.sender = Some(Sender::start(source, name, self.send_dests.clone(), keep_local, self.mode.clone())?);
         Ok(())
@@ -644,6 +669,7 @@ impl Sender {
             packets: packets.clone(),
             level: level.clone(),
             peak: 0.0,
+            scope: Default::default(),
             mode,
             last_push: None,
             resume: true,
@@ -666,6 +692,8 @@ struct Packetizer {
     packets: Arc<AtomicU64>,
     level: Arc<AtomicU64>,
     peak: f32,
+    /// What is being sent, for the visualizers.
+    scope: crate::scope::Scope,
     mode: Arc<AtomicU8>,
     last_push: Option<Instant>,
     /// Mark the next packet as the first after a pause.
@@ -684,6 +712,7 @@ impl Packetizer {
             self.resume = true;
         }
         self.last_push = Some(now);
+        self.scope.push(data, rate, ch);
         let out_ch = ch.min(2);
         // Keep first two channels (front L/R) for surround sources.
         for frame in data.chunks_exact(ch) {

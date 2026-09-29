@@ -361,7 +361,7 @@ pub extern "system" fn Java_app_streamsound_Native_stateJson(mut env: JNIEnv, _t
         let ips: Vec<String> = e.local_ips().iter().map(|i| format!(r#""{i}""#)).collect();
         format!(
             r#"{{"name":"{}","ips":[{}],"mode":"{}","outputMs":{:.1},"aaudio":{},"captureMs":{:.1},"receiving":{},"receiverError":"{}","playLocal":{},"forwarded":{},"sending":{},"sentPackets":{},"sendLevel":{:.3},"sendError":"{}","peers":[{}],"streams":[{}]}}"#,
-            esc(&e.name),
+            esc(&e.name()),
             ips.join(","),
             e.mode().as_str(),
             e.output_latency_ms(),

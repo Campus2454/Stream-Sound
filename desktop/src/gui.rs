@@ -295,7 +295,7 @@ impl eframe::App for App {
                     ui.label(RichText::new("Stream Sound").size(26.0).strong().color(RED));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let ip = self.ips.first().map(|i| i.to_string()).unwrap_or_else(|| t("ไม่พบ IP"));
-                        let r = ui.label(RichText::new(t(format!("เครื่องนี้: {} ({ip})", self.engine.name))).weak());
+                        let r = ui.label(RichText::new(t(format!("เครื่องนี้: {} ({ip})", self.engine.name()))).weak());
                         if self.ips.len() > 1 {
                             let all: Vec<String> = self.ips.iter().map(|i| i.to_string()).collect();
                             r.on_hover_text(all.join("\n"));
