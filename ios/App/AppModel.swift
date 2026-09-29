@@ -128,6 +128,15 @@ final class AppModel: ObservableObject {
         Task { await checkUpdate(quiet: true) }
     }
 
+    /// Update checks: at launch, then every 5 minutes while the app is open.
+    private var lastUpdateCheck = Date()
+    private static let updateEvery: TimeInterval = 5 * 60
+
+    private func maybeCheckUpdate() {
+        guard active, !checkingUpdate, Date().timeIntervalSince(lastUpdateCheck) >= AppModel.updateEvery else { return }
+        Task { await checkUpdate(quiet: true) }
+    }
+
     // MARK: polling
 
     private func tick() {
@@ -149,6 +158,7 @@ final class AppModel: ObservableObject {
         }
         if ticks % 20 == 0 {
             pushConfig(force: false)
+            maybeCheckUpdate()
         }
     }
 
@@ -376,6 +386,7 @@ final class AppModel: ObservableObject {
 
     func checkUpdate(quiet: Bool) async {
         checkingUpdate = true
+        lastUpdateCheck = Date()
         if !quiet { updateText = "กำลังตรวจสอบอัปเดต…" }
         defer { checkingUpdate = false }
         do {

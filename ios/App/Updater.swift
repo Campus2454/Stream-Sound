@@ -79,10 +79,31 @@ enum Updater {
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("StreamSound-updater", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 15
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        // Checked every 5 minutes: ask "changed since last time?" so the
+        // answer (304) doesn't count against GitHub's 60 calls/hour limit.
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        let d = UserDefaults.standard
+        let etagKey = "updateETag.\(repo)", bodyKey = "updateBody.\(repo)"
+        let cached = d.data(forKey: bodyKey)
+        if cached != nil, let tag = d.string(forKey: etagKey) {
+            req.setValue(tag, forHTTPHeaderField: "If-None-Match")
+        }
+        let (fresh, resp) = try await URLSession.shared.data(for: req)
+        let http = resp as? HTTPURLResponse
+        let code = http?.statusCode ?? 0
         if code == 404 { return [] }
-        guard code == 200 else { throw URLError(.badServerResponse) }
+        let data: Data
+        if code == 304, let c = cached {
+            data = c
+        } else if code == 200 {
+            data = fresh
+            if let tag = http?.value(forHTTPHeaderField: "ETag") {
+                d.set(tag, forKey: etagKey)
+                d.set(fresh, forKey: bodyKey)
+            }
+        } else {
+            throw URLError(.badServerResponse)
+        }
         struct Rel: Decodable {
             struct Asset: Decodable { let name: String }
             let tag_name: String
