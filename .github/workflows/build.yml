@@ -1,0 +1,43 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install audio and window libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev libwayland-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p ssnd-core
+      - run: cargo build --locked --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StreamSound-linux-x64
+          path: target/release/stream-sound
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p ssnd-core
+      - run: cargo build --locked --release
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out/StreamSound | Out-Null
+          Copy-Item target/release/stream-sound.exe out/StreamSound/StreamSound.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StreamSound-windows-x64
+          path: out/StreamSound

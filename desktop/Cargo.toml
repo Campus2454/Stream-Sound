@@ -1,0 +1,9 @@
+[package]
+name = "stream-sound"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ssnd-core = { path = "../core" }
+anyhow = "1"
+eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
