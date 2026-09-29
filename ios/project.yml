@@ -1,0 +1,55 @@
+# Xcode project for the iPhone app, generated on the CI Mac with XcodeGen
+# (`xcodegen generate`); the .xcodeproj itself is not committed.
+name: StreamSound
+options:
+  bundleIdPrefix: app.streamsound
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_BITCODE: NO
+    DEVELOPMENT_TEAM: ""
+    # The Rust engine (ios/rust), built by CI into build/rust/<sdk> before Xcode runs.
+    SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridge.h
+    HEADER_SEARCH_PATHS: $(PROJECT_DIR)/rust/include
+    LIBRARY_SEARCH_PATHS: $(PROJECT_DIR)/build/rust/$(PLATFORM_NAME)
+    OTHER_LDFLAGS: -lssnd_ios -framework AudioToolbox -framework CoreAudio -framework AVFoundation -framework CoreFoundation -framework Security
+    # Signed later by SideStore / AltStore / Sideloadly with your own Apple ID.
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+targets:
+  StreamSound:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.streamsound.ios
+        PRODUCT_NAME: StreamSound
+        INFOPLIST_FILE: App/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: Broadcast
+        embed: true
+  Broadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Broadcast
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.streamsound.ios.broadcast
+        PRODUCT_NAME: StreamSoundBroadcast
+        INFOPLIST_FILE: Broadcast/Info.plist
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - sdk: ReplayKit.framework

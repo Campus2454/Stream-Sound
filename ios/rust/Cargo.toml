@@ -1,0 +1,24 @@
+[package]
+name = "ssnd-ios"
+version = "0.1.0"
+edition = "2021"
+description = "C bridge between the iOS app (Swift) and the Stream Sound engine"
+
+[lib]
+# `lib` too, so `cargo test` can build the crate on a desktop host.
+crate-type = ["staticlib", "lib"]
+
+[dependencies]
+ssnd-core = { path = "../../core" }
+parking_lot = "0.12"
+if-addrs = "0.13"
+
+# Own workspace so the iOS build never touches the root Cargo.toml / Cargo.lock.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Swift can't unwind Rust panics; every entry point catches them instead.
+panic = "unwind"
