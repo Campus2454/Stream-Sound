@@ -2432,6 +2432,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssnd-android"
+version = "0.1.0"
+dependencies = [
+ "jni 0.21.1",
+ "parking_lot",
+ "ssnd-core",
+]
+
+[[package]]
 name = "ssnd-core"
 version = "0.1.0"
 dependencies = [

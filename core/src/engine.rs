@@ -7,9 +7,9 @@ use crate::discovery::{Announce, Discovery, Peer};
 use crate::jitter::{Mixer, StreamBuffer, StreamEntry, StreamStats};
 use crate::proto::*;
 use anyhow::Context;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 use cpal::{BufferSize, SampleFormat, StreamConfig};
 use parking_lot::{Mutex, RwLock};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -31,6 +31,9 @@ pub struct EngineConfig {
     pub audio_port: u16,
     pub latency_ms: f64,
     pub discovery: bool,
+    /// The host app pulls audio with `Engine::render` instead of the engine
+    /// opening the speaker itself (Android, iOS).
+    pub external_output: bool,
 }
 
 impl Default for EngineConfig {
@@ -40,6 +43,7 @@ impl Default for EngineConfig {
             audio_port: DEFAULT_AUDIO_PORT,
             latency_ms: 20.0,
             discovery: true,
+            external_output: cfg!(target_os = "android"),
         }
     }
 }
@@ -65,6 +69,7 @@ pub struct Engine {
     receiver: Option<Receiver>,
     sender: Option<Sender>,
     send_dests: Arc<RwLock<Vec<SocketAddr>>>,
+    external_output: bool,
 }
 
 fn random_u32() -> u32 {
@@ -105,6 +110,7 @@ impl Engine {
             receiver: None,
             sender: None,
             send_dests: Arc::default(),
+            external_output: cfg.external_output,
         }
     }
 
@@ -124,6 +130,7 @@ impl Engine {
             self.forward.clone(),
             self.play_local.clone(),
             self.forwarded.clone(),
+            !self.external_output,
         )?);
         self.receiving_flag.store(true, Ordering::Relaxed);
         Ok(())
@@ -177,6 +184,24 @@ impl Engine {
 
     pub fn streams(&self) -> Vec<StreamStats> {
         self.mixer.lock().stats()
+    }
+
+    /// Pull mixed audio for the speaker when `external_output` is set.
+    /// Fills `out` (interleaved, `ch` channels at `rate`) with silence when
+    /// nothing is being received.
+    pub fn render(&self, out: &mut [f32], rate: u32, ch: usize) {
+        if self.receiver.is_some() {
+            self.mixer.lock().render(out, rate, ch);
+        } else {
+            out.fill(0.0);
+        }
+    }
+
+    /// Feed captured audio when sending from `Source::External`.
+    pub fn push_capture(&self, data: &[f32], rate: u32, ch: usize) {
+        if let Some(s) = &self.sender {
+            s.packetizer.lock().push(data, rate, ch);
+        }
     }
 
     // ---- sending ---------------------------------------------------------
@@ -251,6 +276,7 @@ impl Receiver {
         forward: Arc<RwLock<Vec<SocketAddr>>>,
         play_local: Arc<AtomicBool>,
         forwarded: Arc<AtomicU64>,
+        own_output: bool,
     ) -> anyhow::Result<Receiver> {
         let sock = udp_socket(port)?;
         sock.set_read_timeout(Some(Duration::from_millis(100)))?;
@@ -270,7 +296,7 @@ impl Receiver {
                 }
             })?);
         }
-        {
+        if own_output {
             let stop = stop.clone();
             let error = error.clone();
             threads.push(thread::Builder::new().name("ssnd-output".into()).spawn(move || {
@@ -397,9 +423,14 @@ fn run_output(mixer: &Arc<Mutex<Mixer>>, stop: &AtomicBool) -> anyhow::Result<()
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+fn run_output(_mixer: &Arc<Mutex<Mixer>>, _stop: &AtomicBool) -> anyhow::Result<()> {
+    anyhow::bail!("on Android the app plays audio itself via Engine::render")
+}
+
 /// Plays the mixer on the default output device until stopped or the
 /// device fails (then the caller rebuilds it).
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn run_output(mixer: &Arc<Mutex<Mixer>>, stop: &AtomicBool) -> anyhow::Result<()> {
     let host = cpal::default_host();
     let device = host.default_output_device().context("no speaker/output device")?;
@@ -446,7 +477,7 @@ fn run_output(mixer: &Arc<Mutex<Mixer>>, stop: &AtomicBool) -> anyhow::Result<()
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("could not open output")))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 #[allow(clippy::too_many_arguments)]
 fn build_output(
     device: &cpal::Device,
@@ -518,7 +549,9 @@ fn build_output(
 // ---- sender ------------------------------------------------------------------
 
 struct Sender {
+    // Dropped first so capture stops before the packetizer goes away.
     capture: CaptureHandle,
+    packetizer: Arc<Mutex<Packetizer>>,
     packets: Arc<AtomicU64>,
     level: Arc<AtomicU64>,
 }
@@ -529,7 +562,7 @@ impl Sender {
         sock.set_nonblocking(true)?;
         let packets = Arc::new(AtomicU64::new(0));
         let level = Arc::new(AtomicU64::new(0));
-        let mut p = Packetizer {
+        let packetizer = Arc::new(Mutex::new(Packetizer {
             sock,
             dests,
             stream_id: random_u32(),
@@ -540,9 +573,10 @@ impl Sender {
             packets: packets.clone(),
             level: level.clone(),
             peak: 0.0,
-        };
-        let capture = capture::start(source, CaptureOptions { keep_local }, Box::new(move |d, r, c| p.push(d, r, c)));
-        Ok(Sender { capture, packets, level })
+        }));
+        let p = packetizer.clone();
+        let capture = capture::start(source, CaptureOptions { keep_local }, Box::new(move |d, r, c| p.lock().push(d, r, c)));
+        Ok(Sender { capture, packetizer, packets, level })
     }
 }
 
@@ -617,5 +651,47 @@ impl Packetizer {
         self.packets.fetch_add(1, Ordering::Relaxed);
         self.level.store(self.peak.to_bits() as u64, Ordering::Relaxed);
         self.peak *= 0.8;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mobile path: the app pushes captured audio in and pulls mixed
+    /// audio out, with the network in between.
+    #[test]
+    fn external_capture_to_external_render() {
+        let cfg = |port| EngineConfig {
+            name: "test".into(),
+            audio_port: port,
+            latency_ms: 10.0,
+            discovery: false,
+            external_output: true,
+        };
+        let mut rx = Engine::new(cfg(47893));
+        rx.start_receiving().unwrap();
+        let mut tx = Engine::new(cfg(47894));
+        tx.start_sending(Source::External, vec!["127.0.0.1:47893".parse().unwrap()], false).unwrap();
+
+        let chunk: Vec<f32> = (0..240)
+            .flat_map(|i| {
+                let v = (i as f32 * 0.1).sin() * 0.5;
+                [v, v]
+            })
+            .collect();
+        for _ in 0..40 {
+            tx.push_capture(&chunk, 48_000, 2);
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(50));
+
+        let streams = rx.streams();
+        assert_eq!(streams.len(), 1, "one incoming stream");
+        assert_eq!(streams[0].lost, 0);
+        let mut out = vec![0.0f32; 480 * 2];
+        rx.render(&mut out, 48_000, 2);
+        assert!(out.iter().any(|v| v.abs() > 0.2), "audio came out of render");
+        assert!(tx.sender_stats().packets >= 40);
     }
 }

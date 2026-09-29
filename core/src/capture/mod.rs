@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 mod cpal_src;
 #[cfg(windows)]
 mod windows_app;
@@ -23,6 +23,9 @@ pub enum Source {
     Input { name: String },
     /// Built-in test tone, useful to check a connection.
     Tone,
+    /// Samples pushed in by the host app (Android/iOS capture their own
+    /// audio and hand it over with `Engine::push_capture`).
+    External,
 }
 
 #[derive(Clone, Debug)]
@@ -75,7 +78,7 @@ pub fn list_sources() -> Vec<SourceInfo> {
     v.extend(linux::list_apps_and_inputs());
     #[cfg(windows)]
     v.extend(windows_app::list_apps());
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     v.extend(cpal_src::list_inputs());
     v.push(SourceInfo { source: Source::Tone, label: "เสียงทดสอบ (โทน 440 Hz)".into(), kind: SourceKind::Tone });
     v
@@ -86,6 +89,10 @@ pub fn list_sources() -> Vec<SourceInfo> {
 pub fn start(source: Source, opts: CaptureOptions, sink: SampleSink) -> CaptureHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let error: Arc<parking_lot::Mutex<Option<String>>> = Arc::default();
+    if source == Source::External {
+        drop(sink);
+        return CaptureHandle { stop, thread: None, error };
+    }
     let t = {
         let stop = stop.clone();
         let error = error.clone();
@@ -130,11 +137,17 @@ fn run(
 fn run_once(source: &Source, opts: &CaptureOptions, sink: SampleSink, stop: &AtomicBool) -> anyhow::Result<()> {
     match source {
         Source::Tone => run_tone(sink, stop),
+        Source::External => Ok(()),
         #[cfg(target_os = "linux")]
         _ => linux::run(source, opts, sink, stop),
         #[cfg(windows)]
         Source::App { key } => windows_app::run(key, opts, sink, stop),
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "android")]
+        _ => {
+            let _ = opts;
+            Err(anyhow::anyhow!("on Android the app captures audio itself"))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         _ => {
             let _ = opts;
             cpal_src::run(source, sink, stop)

@@ -1,0 +1,13 @@
+[package]
+name = "ssnd-android"
+version = "0.1.0"
+edition = "2021"
+description = "JNI bridge between the Android app and the Stream Sound engine"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ssnd-core = { path = "../../core" }
+jni = "0.21"
+parking_lot = "0.12"

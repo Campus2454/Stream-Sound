@@ -95,7 +95,7 @@ pub fn run(source: &Source, opts: &CaptureOptions, sink: SampleSink, stop: &Atom
             };
             record(&monitor, sink, stop, &mut tick)
         }
-        Source::Tone => unreachable!("handled by caller"),
+        Source::Tone | Source::External => Ok(()),
     }
 }
 

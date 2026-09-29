@@ -5,15 +5,16 @@ shared by every platform; desktop UI in Thai.
 
 ## Builds
 
-Every push builds Windows and Linux automatically: open the **Actions** tab,
-pick the latest green run, and download `StreamSound-windows-x64` or
-`StreamSound-linux-x64` under *Artifacts* (they arrive as .zip files).
+Every push builds Windows, Linux and Android automatically: open the
+**Actions** tab, pick the latest green run, and download
+`StreamSound-windows-x64`, `StreamSound-linux-x64` or `StreamSound-android`
+under *Artifacts* (they arrive as .zip files).
 
 | Platform | Status |
 |---|---|
 | Windows 10/11 | Built and unit-tested on GitHub's Windows runner; not yet tried on a real PC |
 | Linux (PulseAudio or PipeWire) | Built and tested end to end |
-| Android | Next step |
+| Android 10+ | Built on GitHub; not yet tried on a real phone |
 | iOS | Planned: cloud Mac build, sideloaded from Windows (receiver first) |
 
 ## How to use (ภาษาไทย)
@@ -31,6 +32,12 @@ pick the latest green run, and download `StreamSound-windows-x64` or
 **Windows:** the first time it runs, Windows Firewall asks about network access.
 Allow **Private networks**, otherwise nothing can reach this PC. SmartScreen may
 warn because the exe is unsigned: "More info" → "Run anyway".
+
+**Android:** unzip `StreamSound-android`, copy `StreamSound.apk` to the phone and
+open it (allow "install unknown apps" for your file manager or browser).
+Sending system or app audio asks for the screen-recording permission; only
+audio is used. Apps that opt out of capture (some streaming apps) stay silent.
+Every build is signed with the same key, so new versions install over old ones.
 
 ## Command line (testing / headless relay)
 
@@ -55,6 +62,11 @@ stream-sound peers       # list devices on the LAN
 - **Stability:** capture and playback run in their own threads and reconnect by
   themselves when a device changes or disappears; panics inside the network
   loop are caught and the loop restarts.
+- **Android:** the Kotlin app (`android/`) owns the speaker (low-latency
+  `AudioTrack`) and capture (`AudioRecord` with playback capture or the mic)
+  and moves audio in and out of the same Rust engine through JNI
+  (`android/rust`). A foreground service with Wi-Fi low-latency and wake locks
+  keeps it running with the screen off.
 - **Capture:**
   - Windows: WASAPI loopback (whole system), process loopback (one app, needs
     Windows 10 2004+), any input device.
