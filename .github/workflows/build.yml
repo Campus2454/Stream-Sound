@@ -181,3 +181,14 @@ jobs:
 
             Apps that are already installed update themselves from here. Every earlier version stays on the Releases page.
           files: release/*
+      # Releases from before version numbers were titled "Stream Sound build N".
+      - name: Name older releases by version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release list --limit 100 --json tagName,name \
+            --jq '.[] | select(.name | startswith("Stream Sound build ")) | .tagName' |
+            while read -r tag; do
+              gh release edit "$tag" --title "Stream Sound $tag (Beta)"
+            done
