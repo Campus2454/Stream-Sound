@@ -20,7 +20,7 @@ on `main` is published as a release that installed apps update from. See
 
 ### ดาวน์โหลดไฟล์
 
-เปิด <https://github.com/Campus2454/Audio-Streaming/releases/latest>
+เปิด <https://github.com/Campus2454/Stream-Sound/releases/latest>
 (ไม่ต้องล็อกอิน) แล้วเลื่อนลงไปที่ **Assets**:
 
 | เครื่อง | ไฟล์ |
@@ -31,7 +31,7 @@ on `main` is published as a release that installed apps update from. See
 
 ติดตั้งครั้งแรกครั้งเดียว หลังจากนั้นแอปจะอัปเดตตัวเองจากหน้านี้ (ดู **อัปเดตอัตโนมัติ** ด้านล่าง)
 
-ไฟล์ทดสอบที่ยังไม่รวมเข้า `main` อยู่ที่ <https://github.com/Campus2454/Audio-Streaming/actions>
+ไฟล์ทดสอบที่ยังไม่รวมเข้า `main` อยู่ที่ <https://github.com/Campus2454/Stream-Sound/actions>
 (ต้องล็อกอิน): กดรายการที่มี **✓ สีเขียว** แล้วดาวน์โหลดจากหัวข้อ **Artifacts** (ได้เป็นไฟล์ .zip)
 
 ### Windows 10/11

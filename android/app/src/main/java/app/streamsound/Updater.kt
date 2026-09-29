@@ -18,12 +18,12 @@ import java.net.URL
  */
 object Updater {
     /**
-     * Newest build wins. The source repo is private, so CI also publishes each
-     * build to a public releases-only repo the app can read without a login.
+     * Newest build wins. The repo must be public: GitHub answers 404 to
+     * anonymous requests for a private one. Installs from before the rename
+     * from Audio-Streaming reach it through GitHub's redirect.
      */
     private val APIS = listOf(
-        "https://api.github.com/repos/Campus2454/Audio-Streaming-Releases/releases/latest",
-        "https://api.github.com/repos/Campus2454/Audio-Streaming/releases/latest",
+        "https://api.github.com/repos/Campus2454/Stream-Sound/releases/latest",
     )
     private const val ASSET = "StreamSound.apk"
 

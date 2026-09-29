@@ -102,12 +102,6 @@ jobs:
     concurrency:
       group: release
       cancel-in-progress: false
-    env:
-      # The source repo is private, so the apps update from a public repo that
-      # holds only releases. Set up once: create it (with a README) and add a
-      # token that can write to it as the RELEASES_TOKEN secret here.
-      RELEASES_REPO: Campus2454/Audio-Streaming-Releases
-      RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -124,22 +118,6 @@ jobs:
         with:
           tag_name: v0.1.${{ github.run_number }}
           target_commitish: ${{ github.sha }}
-          name: Stream Sound build ${{ github.run_number }}
-          make_latest: true
-          body: |
-            Windows: StreamSound-windows-x64.zip (or the .exe)
-            Linux: StreamSound-linux-x86_64 (chmod +x, then run)
-            Android: StreamSound.apk
-
-            Apps that are already installed update themselves from here.
-          files: release/*
-      - name: Publish to the public releases repo
-        if: env.RELEASES_TOKEN != ''
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: ${{ env.RELEASES_REPO }}
-          token: ${{ env.RELEASES_TOKEN }}
-          tag_name: v0.1.${{ github.run_number }}
           name: Stream Sound build ${{ github.run_number }}
           make_latest: true
           body: |

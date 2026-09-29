@@ -12,10 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Where releases are looked for, newest build wins. The source repo is
-/// private, so CI also publishes every build to a public releases-only repo
-/// that the apps can read without logging in.
-pub const REPOS: [&str; 2] = ["Campus2454/Audio-Streaming-Releases", "Campus2454/Audio-Streaming"];
+/// Where releases are looked for (newest build wins). The repo must be public:
+/// GitHub answers 404 to anonymous requests for a private one. Copies from
+/// before the repo was renamed from Audio-Streaming still reach it through
+/// GitHub's rename redirect.
+pub const REPOS: [&str; 1] = ["Campus2454/Stream-Sound"];
 
 #[cfg(windows)]
 const ASSET: &str = "StreamSound-windows-x64.exe";
