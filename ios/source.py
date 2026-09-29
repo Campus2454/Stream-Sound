@@ -1,15 +1,17 @@
 """Writes the SideStore / AltStore source for one build (see ios/README.md).
 
-usage: source.py <ipa> <build> <owner/repo>
+usage: source.py <ipa> <version> <build code> <tag> <owner/repo>
+
+Lists only this build; SideStore offers it as the update.
 """
 import datetime
 import json
 import os
 import sys
 
-ipa, build, repo = sys.argv[1], sys.argv[2], sys.argv[3]
+ipa, version, build, tag, repo = sys.argv[1:6]
 base = f"https://github.com/{repo}/releases"
-version = f"0.1.{build}"
+beta = version.count(".") >= 2
 print(json.dumps({
     "name": "Stream Sound",
     "identifier": "app.streamsound.source",
@@ -30,8 +32,8 @@ print(json.dumps({
             "version": version,
             "buildVersion": build,
             "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "localizedDescription": f"Stream Sound build {build}",
-            "downloadURL": f"{base}/download/v{version}/StreamSound.ipa",
+            "localizedDescription": f"Stream Sound v{version}" + (" (เบต้า)" if beta else ""),
+            "downloadURL": f"{base}/download/{tag}/StreamSound.ipa",
             "size": os.path.getsize(ipa),
             "minOSVersion": "15.0",
         }],

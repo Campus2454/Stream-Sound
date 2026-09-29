@@ -23,15 +23,41 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: write
+      actions: read
     env:
-      # Same build number as the release this belongs to; 0 for test builds,
-      # so an installed test build always offers the next real release.
-      SSND_BUILD: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.run_number || 0 }}
+      # Release builds take the version of the build run they follow (see
+      # "Work out the version"); test builds are 0.1.0, older than any release.
+      SSND_VERSION: "0.1.0"
+      SSND_TAG: ""
       IPHONEOS_DEPLOYMENT_TARGET: "15.0"
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      # build.yml saves the release's version as the "version" artifact.
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        with:
+          name: version
+          path: version
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Work out the version
+        run: |
+          if [ -f version/version.env ]; then
+            cat version/version.env >> "$GITHUB_ENV"
+            . version/version.env
+          elif [ "${{ github.event_name }}" = workflow_run ]; then
+            # Releases made before version.env existed: v0.1.<run number>.
+            SSND_VERSION="0.1.${{ github.event.workflow_run.run_number }}"
+            SSND_TAG="v$SSND_VERSION"
+            printf 'SSND_VERSION=%s\nSSND_TAG=%s\n' "$SSND_VERSION" "$SSND_TAG" >> "$GITHUB_ENV"
+          fi
+          # Same number Android uses as versionCode: X*10000000 + Y*100000 + Z.
+          IFS=. read -r X Y Z <<<"$SSND_VERSION"
+          echo "SSND_CODE=$(( X * 10000000 + Y * 100000 + ${Z:-0} ))" >> "$GITHUB_ENV"
+          echo "version ${SSND_VERSION} tag ${SSND_TAG:-none}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
@@ -59,7 +85,7 @@ jobs:
           set -o pipefail
           xcodebuild -project StreamSound.xcodeproj -scheme StreamSound -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/dd \
-            CURRENT_PROJECT_VERSION="$SSND_BUILD" MARKETING_VERSION="0.1.$SSND_BUILD" \
+            CURRENT_PROJECT_VERSION="$SSND_CODE" MARKETING_VERSION="$SSND_VERSION" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build | tee build/xcodebuild.log | grep -E "error|warning: .*\.swift|BUILD" || true
           test -d build/dd/Build/Products/Release-iphoneos/StreamSound.app
@@ -82,7 +108,7 @@ jobs:
         run: |
           REPO="${{ github.repository }}"
           cp App/Assets.xcassets/AppIcon.appiconset/icon-1024.png StreamSound-icon.png
-          python3 source.py StreamSound.ipa "$SSND_BUILD" "$REPO" > StreamSound-source.json
+          python3 source.py StreamSound.ipa "$SSND_VERSION" "$SSND_CODE" "${SSND_TAG:-v$SSND_VERSION}" "$REPO" > StreamSound-source.json
           cat StreamSound-source.json
       - uses: actions/upload-artifact@v4
         with:
@@ -94,8 +120,8 @@ jobs:
           name: xcodebuild-log
           path: ios/build/xcodebuild.log
       - name: Add to the release
-        if: github.event_name == 'workflow_run'
+        if: github.event_name == 'workflow_run' && env.SSND_TAG != ''
         working-directory: ios
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "v0.1.$SSND_BUILD" StreamSound.ipa StreamSound-source.json StreamSound-icon.png --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$SSND_TAG" StreamSound.ipa StreamSound-source.json StreamSound-icon.png --clobber --repo "${{ github.repository }}"

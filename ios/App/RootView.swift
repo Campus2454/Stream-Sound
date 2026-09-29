@@ -23,8 +23,8 @@ struct RootView: View {
             Header()
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.gap) {
-                    if let b = model.newerBuild {
-                        UpdateBanner(build: b)
+                    if let r = model.newer {
+                        UpdateBanner(release: r)
                     }
                     switch model.tab {
                     case .send: SendView()
@@ -112,13 +112,13 @@ struct Header: View {
 
 struct UpdateBanner: View {
     @EnvironmentObject var model: AppModel
-    let build: Int
+    let release: Updater.Release
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("มีเวอร์ชันใหม่ (build \(build))").font(.system(size: 15, weight: .bold)).foregroundColor(.white)
-                Text("ติดตั้งผ่าน SideStore").font(.system(size: 12)).foregroundColor(.white.opacity(0.8))
+                Text("มีเวอร์ชันใหม่ \(release.version)\(release.beta ? " (เบต้า)" : "")").font(.system(size: 15, weight: .bold)).foregroundColor(.white)
+                Text(release.beta ? "ดาวน์โหลดแล้วติดตั้งผ่าน SideStore" : "ติดตั้งผ่าน SideStore").font(.system(size: 12)).foregroundColor(.white.opacity(0.8))
             }
             Spacer()
             Button("อัปเดตเลย") { model.installUpdate(addSource: false) }

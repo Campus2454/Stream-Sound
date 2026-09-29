@@ -88,7 +88,7 @@ struct SettingsView: View {
             SectionTitle(text: "อัปเดต")
             Card {
                 HStack {
-                    Text("เวอร์ชัน build \(Updater.currentBuild)").font(.system(size: 15)).foregroundColor(Theme.text)
+                    Text("เวอร์ชันนี้: \(Updater.currentText)").font(.system(size: 15)).foregroundColor(Theme.text)
                     Spacer()
                     if model.checkingUpdate { ProgressView().tint(Theme.text2) }
                 }
@@ -109,7 +109,9 @@ struct SettingsView: View {
                 }
                 .buttonStyle(PressStyle())
                 .disabled(model.checkingUpdate)
-                Text("SideStore จะแจ้งและติดตั้งเวอร์ชันใหม่ให้ รวมถึงต่ออายุแอปทุก 7 วัน")
+                RowDivider()
+                SwitchRow(title: "รับเวอร์ชันเบต้าด้วย", subtitle: "ได้ของใหม่ก่อน แต่อาจยังมีจุดที่ไม่เสถียร", isOn: $model.allowBeta)
+                Text("SideStore จะแจ้งและติดตั้งเวอร์ชันหลักให้ รวมถึงต่ออายุแอปทุก 7 วัน")
                     .font(.system(size: 12)).foregroundColor(Theme.text3)
             }
 

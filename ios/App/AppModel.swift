@@ -92,7 +92,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var micSending = false
     @Published private(set) var report: BroadcastReport? = nil
     @Published var updateText = ""
-    @Published var newerBuild: Int? = nil
+    @Published var newer: Updater.Release? = nil
+    @Published var allowBeta: Bool { didSet { d.set(allowBeta, forKey: "allowBeta"); Task { await checkUpdate(quiet: true) } } }
     @Published var checkingUpdate = false
     private var active = true
 
@@ -113,6 +114,7 @@ final class AppModel: ObservableObject {
         autoReceive = d.object(forKey: "autoReceive") as? Bool ?? true
         sendSource = SendSource(rawValue: d.string(forKey: "sendSource") ?? "") ?? .screen
         playLocal = true
+        allowBeta = d.object(forKey: "allowBeta") as? Bool ?? true
 
         engine.setManualPeers(manualIPs)
         applyVolume()
@@ -377,16 +379,16 @@ final class AppModel: ObservableObject {
         if !quiet { updateText = "กำลังตรวจสอบอัปเดต…" }
         defer { checkingUpdate = false }
         do {
-            switch try await Updater.check() {
+            switch try await Updater.check(beta: allowBeta) {
             case .upToDate:
-                newerBuild = nil
+                newer = nil
                 updateText = "เป็นเวอร์ชันล่าสุดแล้ว"
             case .noRelease:
-                newerBuild = nil
+                newer = nil
                 updateText = "ยังไม่มีเวอร์ชันที่เผยแพร่บน GitHub"
-            case .newer(let b):
-                newerBuild = b
-                updateText = "มี build \(b) ให้อัปเดต"
+            case .newer(let r):
+                newer = r
+                updateText = "มีเวอร์ชัน \(r.version)\(r.beta ? " (เบต้า)" : "") ให้อัปเดต"
             }
         } catch {
             if !quiet { updateText = "ตรวจสอบอัปเดตไม่ได้: \(error.localizedDescription)" }
@@ -394,7 +396,8 @@ final class AppModel: ObservableObject {
     }
 
     func installUpdate(addSource: Bool) {
-        Updater.openInstaller(addSource: addSource) { [weak self] msg in self?.show(msg) }
+        let beta = addSource ? nil : newer.flatMap { $0.beta ? $0 : nil }
+        Updater.openInstaller(addSource: addSource, beta: beta) { [weak self] msg in self?.show(msg) }
     }
 
     func quit() {
