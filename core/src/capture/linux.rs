@@ -52,7 +52,11 @@ fn app_key(v: &Value) -> Option<String> {
 pub fn list_apps_and_inputs() -> Vec<SourceInfo> {
     let mut v = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let me = std::process::id().to_string();
     for si in pactl_json("sink-inputs") {
+        if prop(&si, "application.process.id") == Some(me.as_str()) {
+            continue; // our own playback: capturing it would loop
+        }
         if let Some(key) = app_key(&si) {
             if seen.insert(key.clone()) {
                 let name = prop(&si, "application.name").unwrap_or(&key).to_string();

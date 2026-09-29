@@ -91,11 +91,16 @@ class StreamService : Service() {
         createChannel()
         goForeground(withProjection = false, withMic = false)
 
-        val name = (Build.MODEL ?: "Android").ifBlank { "Android" }
-        val mode = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(PREF_LATENCY_MODE, "balanced") ?: "balanced"
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val model = (Build.MODEL ?: "Android").ifBlank { "Android" }
+        val name = try { prefs.getString("name", null) } catch (_: Exception) { null }?.takeIf { it.isNotBlank() } ?: model
+        val mode = try { prefs.getString(PREF_LATENCY_MODE, "balanced") } catch (_: Exception) { null } ?: "balanced"
         handle = Native.create(name, mode)
-        val err = Native.startReceiving(handle)
-        if (err.isNotEmpty()) lastError = err
+        val autoReceive = try { prefs.getBoolean("autoReceive", true) } catch (_: Exception) { true }
+        if (autoReceive) {
+            val err = Native.startReceiving(handle)
+            if (err.isNotEmpty()) lastError = "เปิดรับเสียงไม่ได้: $err"
+        }
 
         acquireLocks()
         running = true
