@@ -118,7 +118,7 @@ impl App {
             }
         }
         updater::cleanup();
-        updater::check_and_download_in_background(app.update.clone());
+        updater::check_and_download_in_background(app.update.clone(), app.s.beta);
         app
     }
 
@@ -191,7 +191,7 @@ impl App {
         // Look for a new version every 6 hours while running.
         if self.last_update_check.elapsed() > Duration::from_secs(6 * 3600) {
             self.last_update_check = Instant::now();
-            updater::check_and_download_in_background(self.update.clone());
+            updater::check_and_download_in_background(self.update.clone(), self.s.beta);
         }
     }
 
@@ -278,7 +278,8 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width(ui.available_width() - 110.0);
-                        ui.label(RichText::new(t(format!("มีเวอร์ชันใหม่ (build {})", release.build))).size(15.0).color(TEXT));
+                        let what = if release.version.is_beta() { "มีเวอร์ชันเบต้าใหม่" } else { "มีเวอร์ชันใหม่" };
+                        ui.label(RichText::new(t(format!("{what} v{}", release.version))).size(15.0).color(TEXT));
                         let busy = self.engine.sender_stats().active || !self.engine.streams().is_empty();
                         let note = if busy { "เสียงจะหยุดสักครู่ระหว่างอัปเดต" } else { "ใช้เวลาไม่กี่วินาที" };
                         ui.label(RichText::new(t(note)).size(12.5).color(Color32::from_white_alpha(190)));

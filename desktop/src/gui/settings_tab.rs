@@ -253,15 +253,14 @@ fn general_card(app: &mut App, ui: &mut Ui) {
 
 fn update_card(app: &mut App, ui: &mut Ui) {
     let status = app.update.lock().clone();
-    let build = updater::current_build();
     let mut check = false;
+    let mut beta_changed = false;
     card(ui, |ui| {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width() - 150.0);
                 section_title(ui, "อัปเดต");
-                let ver = if build == 0 { "รุ่นทดสอบ (dev)".to_string() } else { format!("build {build}") };
-                ui.label(RichText::new(t(format!("เวอร์ชันนี้: {ver}"))).size(13.0).color(TEXT2));
+                ui.label(RichText::new(t(format!("เวอร์ชันนี้: {}", version_label(updater::current())))).size(13.0).color(TEXT2));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let idle = matches!(
@@ -282,11 +281,12 @@ fn update_card(app: &mut App, ui: &mut Ui) {
             UpdateStatus::Idle => (String::new(), TEXT2),
             UpdateStatus::Checking => ("กำลังตรวจสอบ…".to_string(), TEXT2),
             UpdateStatus::UpToDate => ("เป็นเวอร์ชันล่าสุดแล้ว".to_string(), GREEN),
-            UpdateStatus::NoRelease => ("ยังไม่มีเวอร์ชันที่เผยแพร่บน GitHub".to_string(), TEXT2),
+            UpdateStatus::NoRelease if app.s.beta => ("ยังไม่มีเวอร์ชันที่เผยแพร่บน GitHub".to_string(), TEXT2),
+            UpdateStatus::NoRelease => ("ยังไม่มีเวอร์ชันทางการ เปิดรับเวอร์ชันเบต้าเพื่อรับเวอร์ชันล่าสุด".to_string(), TEXT2),
             UpdateStatus::Downloading { release, percent } => {
-                (format!("กำลังดาวน์โหลด build {} ({percent}%)", release.build), TEXT)
+                (format!("กำลังดาวน์โหลด v{} ({percent}%)", release.version), TEXT)
             }
-            UpdateStatus::Ready { release, .. } => (format!("build {} พร้อมติดตั้ง กดปุ่มด้านบนสุดเพื่ออัปเดต", release.build), RED_HI),
+            UpdateStatus::Ready { release, .. } => (format!("v{} พร้อมติดตั้ง กดปุ่มด้านบนสุดเพื่ออัปเดต", release.version), RED_HI),
             UpdateStatus::Failed(e) => (update_error(e), ERROR),
         };
         if !text.is_empty() {
@@ -303,12 +303,40 @@ fn update_card(app: &mut App, ui: &mut Ui) {
                 r.on_hover_text(e);
             }
         }
+        ui.add_space(10.0);
+        beta_changed = toggle_row(
+            ui,
+            "รับเวอร์ชันเบต้าด้วย",
+            Some("ได้ของใหม่ก่อน แต่อาจยังไม่เสถียรเท่าเวอร์ชันทางการ"),
+            &mut app.s.beta,
+        )
+        .changed();
         hint(ui, "แอปตรวจหาเวอร์ชันใหม่จาก GitHub ให้เองทุก 6 ชั่วโมง");
     });
+    if beta_changed {
+        app.save();
+        // Look again with the new choice, dropping a downloaded beta if
+        // betas were just turned off. A download in progress finishes first.
+        let stale = match &*app.update.lock() {
+            UpdateStatus::Ready { release, .. } => release.version.is_beta() && !app.s.beta,
+            UpdateStatus::Checking | UpdateStatus::Downloading { .. } => false,
+            _ => true,
+        };
+        check |= stale;
+    }
     if check {
         app.last_update_check = Instant::now();
         *app.update.lock() = UpdateStatus::Idle;
-        updater::check_and_download_in_background(app.update.clone());
+        updater::check_and_download_in_background(app.update.clone(), app.s.beta);
+    }
+}
+
+/// "0.2", "0.2.3 (เบต้า)", or a note for local builds.
+fn version_label(v: Option<updater::Version>) -> String {
+    match v {
+        Some(v) if v.is_beta() => format!("{v} (เบต้า)"),
+        Some(v) => v.to_string(),
+        None => "รุ่นทดสอบ (dev)".to_string(),
     }
 }
 

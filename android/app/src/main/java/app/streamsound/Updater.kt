@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -12,32 +13,53 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Self-update from GitHub Releases. CI tags each release `v0.1.<build>` and
- * attaches StreamSound.apk; the app's versionCode is that same build number.
+ * Self-update from GitHub Releases. Releases are tagged `vX.Y` (official) or
+ * `vX.Y.Z` (beta, the Z-th change on main after vX.Y); see .github/version.sh.
+ * CI sets the app's versionName to that version and its versionCode to match.
  * Android always asks the user to confirm installing a sideloaded update.
  */
 object Updater {
     /**
-     * Newest build wins. The repo must be public: GitHub answers 404 to
-     * anonymous requests for a private one. Installs from before the rename
-     * from Audio-Streaming reach it through GitHub's redirect.
+     * The repo must be public: GitHub answers 404 to anonymous requests for a
+     * private one. Installs from before the rename from Audio-Streaming reach
+     * it through GitHub's redirect.
      */
-    private val APIS = listOf(
-        "https://api.github.com/repos/Campus2454/Stream-Sound/releases/latest",
-    )
+    private const val API = "https://api.github.com/repos/Campus2454/Stream-Sound"
     private const val ASSET = "StreamSound.apk"
 
-    data class Release(val build: Long, val tag: String, val url: String)
+    /** `X.Y` (official) or `X.Y.Z` (beta); 0.2 < 0.2.1 < 0.2.2 < 0.3. */
+    data class Version(val major: Int, val minor: Int, val beta: Int?) : Comparable<Version> {
+        val isBeta get() = beta != null
+
+        override fun compareTo(other: Version) =
+            compareValuesBy(this, other, { it.major }, { it.minor }, { it.beta ?: -1 })
+
+        override fun toString() = if (beta == null) "$major.$minor" else "$major.$minor.$beta"
+
+        companion object {
+            private val PATTERN = Regex("""v?(\d{1,9})\.(\d{1,9})(?:\.(\d{1,9}))?""")
+
+            /** Parses "v0.2", "0.2" or "v0.2.3"; null for anything else. */
+            fun parse(s: String?): Version? {
+                val m = PATTERN.matchEntire(s?.trim() ?: return null) ?: return null
+                val (x, y, z) = m.destructured
+                return Version(x.toInt(), y.toInt(), z.takeIf { it.isNotEmpty() }?.toInt())
+            }
+        }
+    }
+
+    data class Release(val version: Version, val tag: String, val url: String)
 
     sealed class Check {
         object UpToDate : Check()
-        /** Nothing has been published on GitHub Releases yet. */
+        /** No release this install may take has been published yet. */
         object NoRelease : Check()
         data class Newer(val release: Release) : Check()
     }
 
-    fun currentBuild(ctx: Context): Long =
-        ctx.packageManager.getPackageInfo(ctx.packageName, 0).longVersionCode
+    /** This install's version; null for local builds, which take any release. */
+    fun current(ctx: Context): Version? =
+        Version.parse(ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName)
 
     private fun open(url: String): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
@@ -47,49 +69,52 @@ object Updater {
             setRequestProperty("User-Agent", "StreamSound-updater")
         }
 
-    /** The latest release at [api], or null when there is none (404, also for a private repo). */
-    private fun latest(api: String): JSONObject? {
-        val conn = open(api)
+    /** The response body, or null on 404 (no release yet, also for a private repo). */
+    private fun get(url: String): String? {
+        val conn = open(url)
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         try {
             val code = conn.responseCode
             if (code == 404) return null
             if (code != 200) throw IOException("GitHub HTTP $code")
-            return JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            return conn.inputStream.bufferedReader().use { it.readText() }
         } finally {
             conn.disconnect()
         }
     }
 
-    private fun buildOf(o: JSONObject): Long {
-        val tag = o.getString("tag_name")
-        return tag.substringAfterLast('.').toLongOrNull() ?: throw IOException("unexpected tag $tag")
+    /**
+     * Compare the newest release (official only unless [beta]) with this
+     * install. Betas are GitHub pre-releases, which /releases/latest leaves
+     * out, so with betas on the newest few releases are listed instead. Blocking.
+     */
+    fun check(ctx: Context, beta: Boolean): Check {
+        val body = get(if (beta) "$API/releases?per_page=20" else "$API/releases/latest") ?: return Check.NoRelease
+        val list = if (beta) JSONArray(body) else JSONArray().put(JSONObject(body))
+        var best: Release? = null
+        for (i in 0 until list.length()) {
+            val o = list.getJSONObject(i)
+            if (o.optBoolean("draft")) continue
+            val tag = o.optString("tag_name")
+            val version = Version.parse(tag) ?: continue
+            if (version.isBeta && !beta) continue
+            // Skips a release whose files are still being uploaded.
+            val url = assetUrl(o) ?: continue
+            if (best == null || version > best.version) best = Release(version, tag, url)
+        }
+        val newest = best ?: return Check.NoRelease
+        val cur = current(ctx)
+        if (cur != null && newest.version <= cur) return Check.UpToDate
+        return Check.Newer(newest)
     }
 
-    /** Compare the newest release with this install. Blocking. */
-    fun check(ctx: Context): Check {
-        var best: JSONObject? = null
-        var error: Exception? = null
-        for (api in APIS) {
-            try {
-                val o = latest(api) ?: continue
-                if (best == null || buildOf(o) > buildOf(best)) best = o
-            } catch (e: Exception) {
-                error = e
-            }
-        }
-        val o = best ?: if (error != null) throw error else return Check.NoRelease
-        val tag = o.getString("tag_name")
-        val build = buildOf(o)
-        if (build <= currentBuild(ctx)) return Check.UpToDate
-        val assets = o.getJSONArray("assets")
+    private fun assetUrl(release: JSONObject): String? {
+        val assets = release.optJSONArray("assets") ?: return null
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
-            if (a.optString("name") == ASSET) {
-                return Check.Newer(Release(build, tag, a.getString("browser_download_url")))
-            }
+            if (a.optString("name") == ASSET) return a.optString("browser_download_url").ifEmpty { null }
         }
-        throw IOException("release $tag has no $ASSET")
+        return null
     }
 
     /** Download the apk into the app's cache. Blocking; [progress] gets 0..100. */

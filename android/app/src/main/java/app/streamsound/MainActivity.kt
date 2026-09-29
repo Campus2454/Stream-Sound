@@ -118,7 +118,9 @@ class MainActivity : ComponentActivity(), Host {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences(StreamService.PREFS, Context.MODE_PRIVATE)
         model = UiModel(PrefsStore(prefs))
-        model.update = model.update.copy(build = Updater.currentBuild(this))
+        model.update = model.update.copy(
+            version = Updater.current(this)?.let { if (it.isBeta) "$it (เบต้า)" else "$it" } ?: "รุ่นทดสอบ (dev)"
+        )
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -281,21 +283,34 @@ class MainActivity : ComponentActivity(), Host {
 
     override fun checkUpdate() {
         if (model.update.busy) return
+        val beta = model.betaUpdates
+        if (model.update.readyBeta && !beta) {
+            // Betas were just turned off: drop the beta that is waiting.
+            updateFile = null
+            model.update = model.update.copy(ready = null, readyBeta = false)
+        }
+        if (model.update.ready != null) return
         model.update = model.update.copy(busy = true, text = "กำลังตรวจสอบ…")
         scope.launch {
             try {
-                when (val result = withContext(Dispatchers.IO) { Updater.check(this@MainActivity) }) {
+                when (val result = withContext(Dispatchers.IO) { Updater.check(this@MainActivity, beta) }) {
                     is Updater.Check.UpToDate -> model.update = model.update.copy(text = "เป็นเวอร์ชันล่าสุดแล้ว")
-                    is Updater.Check.NoRelease -> model.update = model.update.copy(text = "ยังไม่พบเวอร์ชันที่เผยแพร่ให้ดาวน์โหลด")
+                    is Updater.Check.NoRelease -> model.update = model.update.copy(
+                        text = if (beta) "ยังไม่พบเวอร์ชันที่เผยแพร่ให้ดาวน์โหลด" else "ยังไม่มีเวอร์ชันทางการ เปิดรับเวอร์ชันเบต้าเพื่อรับเวอร์ชันล่าสุด"
+                    )
                     is Updater.Check.Newer -> {
                         val rel = result.release
                         val file = withContext(Dispatchers.IO) {
                             Updater.download(this@MainActivity, rel) { p ->
-                                runOnUiThread { model.update = model.update.copy(text = "กำลังดาวน์โหลด build ${rel.build} ($p%)") }
+                                runOnUiThread { model.update = model.update.copy(text = "กำลังดาวน์โหลด v${rel.version} ($p%)") }
                             }
                         }
                         updateFile = file
-                        model.update = model.update.copy(text = "build ${rel.build} พร้อมติดตั้ง", readyBuild = rel.build)
+                        model.update = model.update.copy(
+                            text = "v${rel.version} พร้อมติดตั้ง",
+                            ready = rel.version.toString(),
+                            readyBeta = rel.version.isBeta,
+                        )
                     }
                 }
             } catch (e: Exception) {

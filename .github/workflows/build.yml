@@ -4,17 +4,59 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run by hand (Actions > build > Run workflow) on main with "official"
+  # ticked to publish an official release.
   workflow_dispatch:
-
-env:
-  # Baked into every app as its build number; the updaters compare it with
-  # the newest release tag (v0.1.<build>).
-  SSND_BUILD: ${{ github.run_number }}
+    inputs:
+      official:
+        description: "Publish an official release (vX.Y). Unticked, it only builds."
+        type: boolean
+        default: false
+      version:
+        description: "Official version, e.g. 1.0. Empty: the one after the last official release."
+        type: string
+        default: ""
 
 jobs:
+  # vX.Y for official releases, vX.Y.Z for betas; see .github/version.sh.
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      title: ${{ steps.v.outputs.title }}
+      channel: ${{ steps.v.outputs.channel }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      latest: ${{ steps.v.outputs.latest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        env:
+          KIND: ${{ inputs.official && 'official' || 'beta' }}
+          WANTED: ${{ inputs.version }}
+        run: |
+          if [ "$KIND" = official ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Official releases are made from main"
+            exit 1
+          fi
+          bash .github/version.sh "$KIND" "$WANTED" | tee -a "$GITHUB_OUTPUT"
+      # For workflows that run after this one (the iPhone build).
+      - name: Save the version
+        run: printf 'SSND_VERSION=%s\nSSND_TAG=%s\n' "${{ steps.v.outputs.version }}" "${{ steps.v.outputs.tag }}" > version.env
+      - uses: actions/upload-artifact@v4
+        with:
+          name: version
+          path: version.env
+
   linux:
+    needs: version
     # Oldest supported image, so the binary runs on Ubuntu 22.04 / Debian 12 and newer.
     runs-on: ubuntu-22.04
+    env:
+      # Baked into the app; the updater compares it with the release tags.
+      SSND_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       # Sound (libpulse) and window libraries are loaded at run time, so the
@@ -39,7 +81,10 @@ jobs:
           path: out/StreamSound-linux-x86_64
 
   windows:
+    needs: version
     runs-on: windows-latest
+    env:
+      SSND_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -57,7 +102,11 @@ jobs:
           path: out/StreamSound
 
   android:
+    needs: version
     runs-on: ubuntu-24.04
+    env:
+      # Also gives the versionCode (android/app/build.gradle.kts).
+      SSND_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -92,10 +141,11 @@ jobs:
           name: StreamSound-android
           path: out/StreamSound.apk
 
-  # Every change on main becomes a GitHub release; the apps update from it.
+  # Every change on main becomes a beta release, and a run by hand with
+  # "official" ticked an official one. Earlier releases are never removed.
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [linux, windows, android]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.official))
+    needs: [version, linux, windows, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -116,14 +166,18 @@ jobs:
           ls -la release
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.${{ github.run_number }}
+          tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Stream Sound build ${{ github.run_number }}
-          make_latest: true
+          name: ${{ needs.version.outputs.title }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          make_latest: ${{ needs.version.outputs.latest }}
+          generate_release_notes: true
           body: |
+            ${{ needs.version.outputs.channel == 'official' && 'Official release (เวอร์ชันทางการ).' || 'Beta (เวอร์ชันเบต้า): the newest changes, tested less than an official release.' }}
+
             Windows: StreamSound-windows-x64.zip (or the .exe)
             Linux: StreamSound-linux-x86_64 (chmod +x, then run)
             Android: StreamSound.apk
 
-            Apps that are already installed update themselves from here.
+            Apps that are already installed update themselves from here. Every earlier version stays on the Releases page.
           files: release/*

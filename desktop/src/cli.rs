@@ -51,15 +51,20 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     }
     match cmd {
         "update" => {
-            println!("this is build {}", crate::updater::current_build());
-            match crate::updater::check()? {
+            let beta = crate::settings::load().beta;
+            match crate::updater::current() {
+                Some(v) => println!("this is version {v}"),
+                None => println!("this is a local build"),
+            }
+            match crate::updater::check(beta)? {
                 crate::updater::Check::UpToDate => println!("already up to date"),
-                crate::updater::Check::NoRelease => println!("no release has been published on GitHub yet"),
+                crate::updater::Check::NoRelease if beta => println!("no release has been published on GitHub yet"),
+                crate::updater::Check::NoRelease => println!("no official release yet (betas are off in Settings)"),
                 crate::updater::Check::Newer(rel) => {
                     println!("downloading {} ...", rel.tag);
                     let file = crate::updater::download(&rel, |_| {})?;
                     let exe = crate::updater::install(&file)?;
-                    println!("updated {} to build {}", exe.display(), rel.build);
+                    println!("updated {} to version {}", exe.display(), rel.version);
                 }
             }
             Ok(())

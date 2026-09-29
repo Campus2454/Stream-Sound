@@ -13,10 +13,13 @@ android {
         // Android 10 is the first version that can capture other apps' audio.
         minSdk = 29
         targetSdk = 34
-        // CI passes the GitHub run number, so every release installs over the last.
-        val build = System.getenv("SSND_BUILD")?.toIntOrNull() ?: 1
-        versionCode = build
-        versionName = "0.1.$build"
+        // CI passes the release version (.github/version.sh): "X.Y" official,
+        // "X.Y.Z" beta. versionCode follows the same order (0.2 < 0.2.1 < 0.3),
+        // so every release installs over the last; old installs had 1..14.
+        val ver = System.getenv("SSND_VERSION")?.takeIf { Regex("""\d{1,2}\.\d{1,2}(\.\d{1,5})?""").matches(it) }
+        val parts = ver?.split('.')?.map { it.toInt() }
+        versionCode = if (parts == null) 1 else parts[0] * 10_000_000 + parts[1] * 100_000 + parts.getOrElse(2) { 0 }
+        versionName = ver ?: "dev"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }

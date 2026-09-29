@@ -82,11 +82,19 @@ on `main` is published as a release that installed apps update from. See
 
 ### อัปเดตอัตโนมัติ
 
-ทุกครั้งที่มีการแก้โค้ดเข้า `main` GitHub จะสร้าง release ใหม่ (build ใหม่) ให้เอง
+เวอร์ชันมี 2 แบบ และทุกเวอร์ชันเก็บไว้ในหน้า [Releases](https://github.com/Campus2454/Stream-Sound/releases) ไม่ถูกลบ
+
+- **`vX.Y` เวอร์ชันทางการ** (เช่น v0.2, v1.0) ออกเมื่อสั่ง: ไปที่ Actions > build > **Run workflow**
+  เลือก branch `main` ติ๊ก **official** แล้วกด Run (ช่อง version เว้นว่างได้ จะได้เลขถัดไปให้เอง)
+- **`vX.Y.Z` เวอร์ชันเบต้า** ออกเองทุกครั้งที่มีการแก้โค้ดเข้า `main` เช่นหลัง v0.2 จะเป็น v0.2.1, v0.2.2, …
+  (ก่อนมีเวอร์ชันทางการครั้งแรก เบต้าจะใช้เลขต่อจากของเดิม v0.1.14, v0.1.17, …)
+- ลำดับใหม่กว่า: v0.2 → v0.2.1 → v0.2.2 → v0.3
+- แอปรับเวอร์ชันเบต้าด้วยเป็นค่าเริ่มต้น ปิดได้ที่หน้า **ตั้งค่า** > **รับเวอร์ชันเบต้าด้วย**
+  (ปิดแล้วจะอัปเดตเฉพาะเวอร์ชันทางการ)
 
 - **Windows / Linux:** แอปเช็กตอนเปิดและทุก 6 ชั่วโมง ถ้ามีเวอร์ชันใหม่จะดาวน์โหลดเก็บไว้เงียบ ๆ
   แล้วขึ้นแถบสีแดง "มีเวอร์ชันใหม่" กด **อัปเดตเลย** เมื่อสะดวก (แอปไม่รีสตาร์ตเองกลางการสตรีม)
-  เลข build ปัจจุบันและปุ่ม **ตรวจสอบอัปเดต** อยู่ที่หน้า **ตั้งค่า**
+  เลขเวอร์ชันปัจจุบันและปุ่ม **ตรวจสอบอัปเดต** อยู่ที่หน้า **ตั้งค่า**
 - **Android:** แอปเช็กและดาวน์โหลดตอนเปิด แล้วขึ้นแถบ **อัปเดตเลย**
   ครั้งแรก Android จะพาไปหน้า "ติดตั้งแอปที่ไม่รู้จัก" ให้เปิดอนุญาตให้ Stream Sound
   แล้วกลับมากดอีกครั้ง Android จะถามยืนยันการติดตั้งทุกครั้ง (ข้ามไม่ได้)
@@ -212,9 +220,14 @@ stream-sound update      # download and install the newest release
   - Linux: PulseAudio/PipeWire monitor (whole system); per-app by moving the
     app's streams to a private sink, which is removed on stop. libpulse is
     loaded at run time, so the binary links nothing but glibc.
-- **Updates:** CI tags each release `v0.1.<run number>` and bakes the same
-  number into the apps (`SSND_BUILD`, Android `versionCode`). The apps read
-  `releases/latest` from the GitHub API and download the matching asset.
+- **Updates:** releases are tagged `vX.Y` (official, run by hand) or `vX.Y.Z`
+  (beta, every push to main; Z counts the changes since vX.Y), worked out by
+  `.github/version.sh`. Betas are GitHub pre-releases once an official release
+  exists. CI bakes the version into the apps (`SSND_VERSION`, Android
+  `versionName`, and `versionCode` = X·10⁷ + Y·10⁵ + Z). With betas on, the apps
+  list the newest releases from the GitHub API; with betas off they read
+  `releases/latest`. Either way they take the newest version that has their
+  file.
 
 ## Tested here (Linux, 2026-09-29)
 
