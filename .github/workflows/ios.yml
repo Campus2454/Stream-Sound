@@ -28,9 +28,6 @@ jobs:
       # so an installed test build always offers the next real release.
       SSND_BUILD: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.run_number || 0 }}
       IPHONEOS_DEPLOYMENT_TARGET: "15.0"
-      # Public releases-only repo (see build.yml); used once RELEASES_TOKEN is set.
-      RELEASES_REPO: Campus2454/Audio-Streaming-Releases
-      RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,9 +80,7 @@ jobs:
       - name: Write the SideStore / AltStore source
         working-directory: ios
         run: |
-          # SideStore can only read a public repo, so point at the releases repo when there is one.
           REPO="${{ github.repository }}"
-          if [ -n "$RELEASES_TOKEN" ]; then REPO="$RELEASES_REPO"; fi
           cp App/Assets.xcassets/AppIcon.appiconset/icon-1024.png StreamSound-icon.png
           python3 source.py StreamSound.ipa "$SSND_BUILD" "$REPO" > StreamSound-source.json
           cat StreamSound-source.json
@@ -104,9 +99,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "v0.1.$SSND_BUILD" StreamSound.ipa StreamSound-source.json StreamSound-icon.png --clobber --repo "${{ github.repository }}"
-      - name: Add to the public releases repo
-        if: github.event_name == 'workflow_run' && env.RELEASES_TOKEN != ''
-        working-directory: ios
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: gh release upload "v0.1.$SSND_BUILD" StreamSound.ipa StreamSound-source.json StreamSound-icon.png --clobber --repo "$RELEASES_REPO"

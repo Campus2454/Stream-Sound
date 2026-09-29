@@ -6,14 +6,13 @@ import UIKit
 /// is out and hands over to SideStore (or AltStore), which re-signs and
 /// installs it from the Stream Sound source CI publishes with each release.
 enum Updater {
-    /// Where CI publishes releases, same list as the desktop and Android
-    /// updaters: the public releases-only repo first, then the (private)
-    /// source repo. The newest build found wins.
-    static let repos = ["Campus2454/Audio-Streaming-Releases", "Campus2454/Stream-Sound"]
+    /// Where CI publishes releases (the public repo itself). More than one
+    /// repo can be listed; the newest build found wins.
+    static let repos = ["Campus2454/Stream-Sound"]
     static let asset = "StreamSound.ipa"
     static let sourceAsset = "StreamSound-source.json"
 
-    /// The public repo, which SideStore can read without a GitHub login.
+    /// SideStore reads this without a GitHub login because the repo is public.
     static var sourceURL: String { "https://github.com/\(repos[0])/releases/latest/download/\(sourceAsset)" }
     static var releasesPage: URL { URL(string: "https://github.com/\(repos[0])/releases/latest")! }
 
