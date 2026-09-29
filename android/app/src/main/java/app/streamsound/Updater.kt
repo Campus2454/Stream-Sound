@@ -17,7 +17,14 @@ import java.net.URL
  * Android always asks the user to confirm installing a sideloaded update.
  */
 object Updater {
-    private const val API = "https://api.github.com/repos/Campus2454/Audio-Streaming/releases/latest"
+    /**
+     * Newest build wins. The source repo is private, so CI also publishes each
+     * build to a public releases-only repo the app can read without a login.
+     */
+    private val APIS = listOf(
+        "https://api.github.com/repos/Campus2454/Audio-Streaming-Releases/releases/latest",
+        "https://api.github.com/repos/Campus2454/Audio-Streaming/releases/latest",
+    )
     private const val ASSET = "StreamSound.apk"
 
     data class Release(val build: Long, val tag: String, val url: String)
@@ -40,29 +47,49 @@ object Updater {
             setRequestProperty("User-Agent", "StreamSound-updater")
         }
 
-    /** Compare the newest release with this install. Blocking. */
-    fun check(ctx: Context): Check {
-        val conn = open(API)
+    /** The latest release at [api], or null when there is none (404, also for a private repo). */
+    private fun latest(api: String): JSONObject? {
+        val conn = open(api)
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         try {
             val code = conn.responseCode
-            if (code == 404) return Check.NoRelease
+            if (code == 404) return null
             if (code != 200) throw IOException("GitHub HTTP $code")
-            val o = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-            val tag = o.getString("tag_name")
-            val build = tag.substringAfterLast('.').toLongOrNull() ?: throw IOException("unexpected tag $tag")
-            if (build <= currentBuild(ctx)) return Check.UpToDate
-            val assets = o.getJSONArray("assets")
-            for (i in 0 until assets.length()) {
-                val a = assets.getJSONObject(i)
-                if (a.optString("name") == ASSET) {
-                    return Check.Newer(Release(build, tag, a.getString("browser_download_url")))
-                }
-            }
-            throw IOException("release $tag has no $ASSET")
+            return JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun buildOf(o: JSONObject): Long {
+        val tag = o.getString("tag_name")
+        return tag.substringAfterLast('.').toLongOrNull() ?: throw IOException("unexpected tag $tag")
+    }
+
+    /** Compare the newest release with this install. Blocking. */
+    fun check(ctx: Context): Check {
+        var best: JSONObject? = null
+        var error: Exception? = null
+        for (api in APIS) {
+            try {
+                val o = latest(api) ?: continue
+                if (best == null || buildOf(o) > buildOf(best)) best = o
+            } catch (e: Exception) {
+                error = e
+            }
+        }
+        val o = best ?: if (error != null) throw error else return Check.NoRelease
+        val tag = o.getString("tag_name")
+        val build = buildOf(o)
+        if (build <= currentBuild(ctx)) return Check.UpToDate
+        val assets = o.getJSONArray("assets")
+        for (i in 0 until assets.length()) {
+            val a = assets.getJSONObject(i)
+            if (a.optString("name") == ASSET) {
+                return Check.Newer(Release(build, tag, a.getString("browser_download_url")))
+            }
+        }
+        throw IOException("release $tag has no $ASSET")
     }
 
     /** Download the apk into the app's cache. Blocking; [progress] gets 0..100. */

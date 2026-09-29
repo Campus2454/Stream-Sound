@@ -10,7 +10,7 @@ use parking_lot::{Mutex, RwLock};
 use ssnd_core::capture::CAPTURE_LATENCY_US;
 use ssnd_core::engine::OUTPUT_LATENCY_US;
 use ssnd_core::proto::DEFAULT_AUDIO_PORT;
-use ssnd_core::{Engine, EngineConfig, Mode, Source};
+use ssnd_core::{Engine, EngineConfig, Mode, Source, Tap};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::Ordering;
@@ -318,6 +318,43 @@ pub extern "system" fn Java_app_streamsound_Native_setMode(mut env: JNIEnv, _thi
     })
 }
 
+/// Visualizer data: fills `out` with one 0..1 value per column. `tap` 0 is
+/// what this device sends, 1 what it plays; `kind` 0 is the 2-second
+/// waveform, 1 the spectrum. False (and `out` untouched) when that side is idle.
+#[no_mangle]
+pub extern "system" fn Java_app_streamsound_Native_scope(
+    env: JNIEnv,
+    _this: JObject,
+    h: jlong,
+    tap: jint,
+    kind: jint,
+    out: JFloatArray,
+) -> jboolean {
+    let ok = guard(false, || {
+        let Some(x) = handle(h) else { return false };
+        let n = env.get_array_length(&out).unwrap_or(0).max(0) as usize;
+        if n == 0 {
+            return false;
+        }
+        let tap = if tap == 0 { Tap::Send } else { Tap::Receive };
+        let Some(snap) = x.engine.read().scope(tap) else { return false };
+        let v = if kind == 0 { snap.waveform(n) } else { snap.spectrum(n) };
+        env.set_float_array_region(&out, 0, &v).is_ok()
+    });
+    ok as jboolean
+}
+
+/// Rename this device; other devices see it within a second or two.
+#[no_mangle]
+pub extern "system" fn Java_app_streamsound_Native_setName(mut env: JNIEnv, _this: JObject, h: jlong, name: JString) {
+    let name = jstr(&mut env, &name);
+    guard((), || {
+        if let Some(x) = handle(h) {
+            x.engine.read().set_name(&name);
+        }
+    })
+}
+
 /// Everything the UI shows, as one JSON object.
 #[no_mangle]
 pub extern "system" fn Java_app_streamsound_Native_stateJson(mut env: JNIEnv, _this: JObject, h: jlong) -> jstring {
@@ -361,7 +398,7 @@ pub extern "system" fn Java_app_streamsound_Native_stateJson(mut env: JNIEnv, _t
         let ips: Vec<String> = e.local_ips().iter().map(|i| format!(r#""{i}""#)).collect();
         format!(
             r#"{{"name":"{}","ips":[{}],"mode":"{}","outputMs":{:.1},"aaudio":{},"captureMs":{:.1},"receiving":{},"receiverError":"{}","playLocal":{},"forwarded":{},"sending":{},"sentPackets":{},"sendLevel":{:.3},"sendError":"{}","peers":[{}],"streams":[{}]}}"#,
-            esc(&e.name),
+            esc(&e.name()),
             ips.join(","),
             e.mode().as_str(),
             e.output_latency_ms(),

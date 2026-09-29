@@ -825,11 +825,13 @@ pub struct Mixer {
     pub mode: Mode,
     pub volume: f32,
     pub muted: bool,
+    /// What is being played, for the visualizers.
+    pub scope: crate::scope::Scope,
 }
 
 impl Mixer {
     pub fn new(mode: Mode) -> Self {
-        Mixer { streams: HashMap::new(), mode, volume: 1.0, muted: false }
+        Mixer { streams: HashMap::new(), mode, volume: 1.0, muted: false, scope: Default::default() }
     }
 
     pub fn render(&mut self, out: &mut [f32], out_rate: u32, out_ch: usize) {
@@ -844,6 +846,7 @@ impl Mixer {
         for v in out.iter_mut() {
             *v = soft_clip(*v);
         }
+        self.scope.push(out, out_rate, out_ch);
     }
 
     pub fn set_mode(&mut self, mode: Mode) {

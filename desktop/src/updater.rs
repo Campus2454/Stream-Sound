@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const REPO: &str = "Campus2454/Audio-Streaming";
+/// Where releases are looked for, newest build wins. The source repo is
+/// private, so CI also publishes every build to a public releases-only repo
+/// that the apps can read without logging in.
+pub const REPOS: [&str; 2] = ["Campus2454/Audio-Streaming-Releases", "Campus2454/Audio-Streaming"];
 
 #[cfg(windows)]
 const ASSET: &str = "StreamSound-windows-x64.exe";
@@ -51,9 +54,12 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-fn latest_url() -> String {
+fn latest_urls() -> Vec<String> {
     // Overridable so the updater can be tested against a local server.
-    std::env::var("SSND_UPDATE_URL").unwrap_or_else(|_| format!("https://api.github.com/repos/{REPO}/releases/latest"))
+    match std::env::var("SSND_UPDATE_URL") {
+        Ok(u) => vec![u],
+        Err(_) => REPOS.iter().map(|r| format!("https://api.github.com/repos/{r}/releases/latest")).collect(),
+    }
 }
 
 fn build_from_tag(tag: &str) -> Option<u32> {
@@ -66,17 +72,37 @@ pub enum Check {
     Newer(Release),
 }
 
-/// Compare the newest release with this build.
-pub fn check() -> anyhow::Result<Check> {
-    let resp = agent().get(&latest_url()).set("Accept", "application/vnd.github+json").call();
-    let resp = match resp {
+/// The latest release at one address; `None` if there is none (or the repo
+/// is private or missing, which GitHub also answers with 404).
+fn latest(url: &str) -> anyhow::Result<Option<(u32, String, serde_json::Value)>> {
+    let resp = match agent().get(url).set("Accept", "application/vnd.github+json").call() {
         Ok(r) => r,
-        Err(ureq::Error::Status(404, _)) => return Ok(Check::NoRelease),
+        Err(ureq::Error::Status(404, _)) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
     let v: serde_json::Value = serde_json::from_reader(resp.into_reader())?;
     let tag = v["tag_name"].as_str().ok_or_else(|| anyhow!("release has no tag"))?.to_string();
     let build = build_from_tag(&tag).ok_or_else(|| anyhow!("unexpected tag {tag}"))?;
+    Ok(Some((build, tag, v)))
+}
+
+/// Compare the newest release with this build.
+pub fn check() -> anyhow::Result<Check> {
+    let mut best: Option<(u32, String, serde_json::Value)> = None;
+    let mut err = None;
+    for url in latest_urls() {
+        match latest(&url) {
+            Ok(Some(r)) if best.as_ref().map_or(true, |b| r.0 > b.0) => best = Some(r),
+            Ok(_) => {}
+            Err(e) => err = Some(e),
+        }
+    }
+    let Some((build, tag, v)) = best else {
+        return match err {
+            Some(e) => Err(e),
+            None => Ok(Check::NoRelease),
+        };
+    };
     if build <= current_build() {
         return Ok(Check::UpToDate);
     }
