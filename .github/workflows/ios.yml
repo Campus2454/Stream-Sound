@@ -1,0 +1,127 @@
+name: ios
+
+# The iPhone app is built on a cloud Mac. It is not signed here: SideStore,
+# AltStore or Sideloadly sign it with your own Apple ID when installing.
+on:
+  pull_request:
+  workflow_dispatch:
+  # After each build of main (which publishes release v0.1.<n>), add the
+  # iPhone app and its SideStore source to that same release.
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: ios-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      actions: read
+    env:
+      # Release builds take the version of the build run they follow (see
+      # "Work out the version"); test builds are 0.1.0, older than any release.
+      SSND_VERSION: "0.1.0"
+      SSND_TAG: ""
+      IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      # build.yml saves the release's version as the "version" artifact.
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        with:
+          name: version
+          path: version
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Work out the version
+        run: |
+          if [ -f version/version.env ]; then
+            cat version/version.env >> "$GITHUB_ENV"
+            . version/version.env
+          elif [ "${{ github.event_name }}" = workflow_run ]; then
+            # Releases made before version.env existed: v0.1.<run number>.
+            SSND_VERSION="0.1.${{ github.event.workflow_run.run_number }}"
+            SSND_TAG="v$SSND_VERSION"
+            printf 'SSND_VERSION=%s\nSSND_TAG=%s\n' "$SSND_VERSION" "$SSND_TAG" >> "$GITHUB_ENV"
+          fi
+          # Same number Android uses as versionCode: X*10000000 + Y*100000 + Z.
+          IFS=. read -r X Y Z <<<"$SSND_VERSION"
+          echo "SSND_CODE=$(( X * 10000000 + Y * 100000 + ${Z:-0} ))" >> "$GITHUB_ENV"
+          echo "version ${SSND_VERSION} tag ${SSND_TAG:-none}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ios/rust
+      - name: Test the engine bridge
+        working-directory: ios/rust
+        run: cargo test --locked
+      - name: Build the engine for iPhone
+        working-directory: ios/rust
+        run: |
+          cargo build --locked --release --target aarch64-apple-ios
+          mkdir -p ../build/rust/iphoneos
+          cp target/aarch64-apple-ios/release/libssnd_ios.a ../build/rust/iphoneos/
+          ls -la ../build/rust/iphoneos
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: |
+          command -v xcodegen || brew install xcodegen
+          xcodegen generate
+      - name: Build the app
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild -project StreamSound.xcodeproj -scheme StreamSound -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/dd \
+            CURRENT_PROJECT_VERSION="$SSND_CODE" MARKETING_VERSION="$SSND_VERSION" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tee build/xcodebuild.log | grep -E "error|warning: .*\.swift|BUILD" || true
+          test -d build/dd/Build/Products/Release-iphoneos/StreamSound.app
+      - name: Package the .ipa
+        working-directory: ios
+        run: |
+          rm -rf build/ipa && mkdir -p build/ipa/Payload
+          cp -R build/dd/Build/Products/Release-iphoneos/StreamSound.app build/ipa/Payload/
+          APP=build/ipa/Payload/StreamSound.app
+          ls "$APP" "$APP/PlugIns"
+          test -d "$APP/PlugIns/StreamSoundBroadcast.appex"
+          # Ad-hoc signature; the installer replaces it with yours.
+          codesign --force --sign - "$APP/PlugIns/StreamSoundBroadcast.appex"
+          codesign --force --sign - "$APP"
+          (cd build/ipa && zip -qry ../../StreamSound.ipa Payload)
+          ls -la StreamSound.ipa
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" -c "Print :CFBundleVersion" "$APP/Info.plist"
+      - name: Write the SideStore / AltStore source
+        working-directory: ios
+        run: |
+          REPO="${{ github.repository }}"
+          cp App/Assets.xcassets/AppIcon.appiconset/icon-1024.png StreamSound-icon.png
+          python3 source.py StreamSound.ipa "$SSND_VERSION" "$SSND_CODE" "${SSND_TAG:-v$SSND_VERSION}" "$REPO" > StreamSound-source.json
+          cat StreamSound-source.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StreamSound-ios
+          path: ios/StreamSound.ipa
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: xcodebuild-log
+          path: ios/build/xcodebuild.log
+      - name: Add to the release
+        if: github.event_name == 'workflow_run' && env.SSND_TAG != ''
+        working-directory: ios
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$SSND_TAG" StreamSound.ipa StreamSound-source.json StreamSound-icon.png --clobber --repo "${{ github.repository }}"
