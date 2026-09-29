@@ -53,8 +53,9 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
         "update" => {
             println!("this is build {}", crate::updater::current_build());
             match crate::updater::check()? {
-                None => println!("already up to date"),
-                Some(rel) => {
+                crate::updater::Check::UpToDate => println!("already up to date"),
+                crate::updater::Check::NoRelease => println!("no release has been published on GitHub yet"),
+                crate::updater::Check::Newer(rel) => {
                     println!("downloading {} ...", rel.tag);
                     let file = crate::updater::download(&rel, |_| {})?;
                     let exe = crate::updater::install(&file)?;

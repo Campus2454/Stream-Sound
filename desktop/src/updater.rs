@@ -36,6 +36,8 @@ pub enum Status {
     Idle,
     Checking,
     UpToDate,
+    /// Nothing has been published on GitHub Releases yet.
+    NoRelease,
     Downloading { release: Release, percent: u32 },
     Ready { release: Release, file: PathBuf },
     Failed(String),
@@ -58,19 +60,25 @@ fn build_from_tag(tag: &str) -> Option<u32> {
     tag.rsplit('.').next()?.parse().ok()
 }
 
-/// The newest release, if it is newer than this build.
-pub fn check() -> anyhow::Result<Option<Release>> {
+pub enum Check {
+    UpToDate,
+    NoRelease,
+    Newer(Release),
+}
+
+/// Compare the newest release with this build.
+pub fn check() -> anyhow::Result<Check> {
     let resp = agent().get(&latest_url()).set("Accept", "application/vnd.github+json").call();
     let resp = match resp {
         Ok(r) => r,
-        Err(ureq::Error::Status(404, _)) => return Ok(None), // no releases yet
+        Err(ureq::Error::Status(404, _)) => return Ok(Check::NoRelease),
         Err(e) => return Err(e.into()),
     };
     let v: serde_json::Value = serde_json::from_reader(resp.into_reader())?;
     let tag = v["tag_name"].as_str().ok_or_else(|| anyhow!("release has no tag"))?.to_string();
     let build = build_from_tag(&tag).ok_or_else(|| anyhow!("unexpected tag {tag}"))?;
     if build <= current_build() {
-        return Ok(None);
+        return Ok(Check::UpToDate);
     }
     let url = v["assets"]
         .as_array()
@@ -80,7 +88,7 @@ pub fn check() -> anyhow::Result<Option<Release>> {
         .and_then(|a| a["browser_download_url"].as_str())
         .ok_or_else(|| anyhow!("release {tag} has no {ASSET}"))?
         .to_string();
-    Ok(Some(Release { build, tag, url }))
+    Ok(Check::Newer(Release { build, tag, url }))
 }
 
 fn exe_path() -> anyhow::Result<PathBuf> {
@@ -178,7 +186,11 @@ pub fn check_and_download_in_background(status: Arc<parking_lot::Mutex<Status>>)
     }
     let _ = std::thread::Builder::new().name("ssnd-update".into()).spawn(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<Status> {
-            let Some(release) = check()? else { return Ok(Status::UpToDate) };
+            let release = match check()? {
+                Check::UpToDate => return Ok(Status::UpToDate),
+                Check::NoRelease => return Ok(Status::NoRelease),
+                Check::Newer(r) => r,
+            };
             *status.lock() = Status::Downloading { release: release.clone(), percent: 0 };
             let st = status.clone();
             let rel = release.clone();

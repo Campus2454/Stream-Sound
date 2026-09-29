@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Process
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -173,9 +174,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Set once the user quits, so nothing starts the service again on the way out. */
+    private var quitting = false
+
     fun ensureService() {
-        if (StreamService.instance == null) {
+        if (!quitting && StreamService.instance == null) {
             startForegroundService(Intent(this, StreamService::class.java))
+        }
+    }
+
+    /** Stop streaming, close the screen and end the process (the service does the last step). */
+    fun quit() {
+        quitting = true
+        if (StreamService.instance != null) {
+            startService(Intent(this, StreamService::class.java).setAction(StreamService.ACTION_QUIT))
+            finishAndRemoveTask()
+        } else {
+            finishAndRemoveTask()
+            Process.killProcess(Process.myPid())
         }
     }
 
@@ -222,18 +238,21 @@ private fun AppScreen(activity: MainActivity) {
         scope.launch {
             updateText = "กำลังตรวจสอบอัปเดต…"
             try {
-                val rel = withContext(Dispatchers.IO) { Updater.check(activity) }
-                if (rel == null) {
-                    updateText = "เป็นเวอร์ชันล่าสุดแล้ว"
-                } else {
-                    updateRelease = rel
-                    val file = withContext(Dispatchers.IO) {
-                        Updater.download(activity, rel) { p ->
-                            activity.runOnUiThread { updateText = "กำลังดาวน์โหลด build ${rel.build} ($p%)" }
+                val result = withContext(Dispatchers.IO) { Updater.check(activity) }
+                when (result) {
+                    is Updater.Check.UpToDate -> updateText = "เป็นเวอร์ชันล่าสุดแล้ว"
+                    is Updater.Check.NoRelease -> updateText = "ยังไม่มีเวอร์ชันที่เผยแพร่บน GitHub"
+                    is Updater.Check.Newer -> {
+                        val rel = result.release
+                        updateRelease = rel
+                        val file = withContext(Dispatchers.IO) {
+                            Updater.download(activity, rel) { p ->
+                                activity.runOnUiThread { updateText = "กำลังดาวน์โหลด build ${rel.build} ($p%)" }
+                            }
                         }
+                        updateFile = file
+                        updateText = "อัปเดตพร้อมติดตั้ง"
                     }
-                    updateFile = file
-                    updateText = "อัปเดตพร้อมติดตั้ง"
                 }
             } catch (e: Exception) {
                 updateText = "ตรวจสอบอัปเดตไม่ได้: ${e.message ?: e.javaClass.simpleName}"
@@ -529,10 +548,7 @@ private fun AppScreen(activity: MainActivity) {
         }
 
         OutlinedButton(
-            onClick = {
-                activity.startService(Intent(activity, StreamService::class.java).setAction(StreamService.ACTION_QUIT))
-                activity.finishAndRemoveTask()
-            },
+            onClick = { activity.quit() },
             modifier = Modifier.fillMaxWidth(),
         ) { Text("ปิดแอปและหยุดทั้งหมด", color = Muted) }
         Spacer(Modifier.height(24.dp))

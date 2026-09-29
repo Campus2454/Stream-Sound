@@ -22,6 +22,13 @@ object Updater {
 
     data class Release(val build: Long, val tag: String, val url: String)
 
+    sealed class Check {
+        object UpToDate : Check()
+        /** Nothing has been published on GitHub Releases yet. */
+        object NoRelease : Check()
+        data class Newer(val release: Release) : Check()
+    }
+
     fun currentBuild(ctx: Context): Long =
         ctx.packageManager.getPackageInfo(ctx.packageName, 0).longVersionCode
 
@@ -33,26 +40,26 @@ object Updater {
             setRequestProperty("User-Agent", "StreamSound-updater")
         }
 
-    /** The newest release if it is newer than this install, else null. Blocking. */
-    fun check(ctx: Context): Release? {
+    /** Compare the newest release with this install. Blocking. */
+    fun check(ctx: Context): Check {
         val conn = open(API)
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         try {
             val code = conn.responseCode
-            if (code == 404) return null // no releases yet
+            if (code == 404) return Check.NoRelease
             if (code != 200) throw IOException("GitHub HTTP $code")
             val o = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
             val tag = o.getString("tag_name")
-            val build = tag.substringAfterLast('.').toLongOrNull() ?: return null
-            if (build <= currentBuild(ctx)) return null
+            val build = tag.substringAfterLast('.').toLongOrNull() ?: throw IOException("unexpected tag $tag")
+            if (build <= currentBuild(ctx)) return Check.UpToDate
             val assets = o.getJSONArray("assets")
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
                 if (a.optString("name") == ASSET) {
-                    return Release(build, tag, a.getString("browser_download_url"))
+                    return Check.Newer(Release(build, tag, a.getString("browser_download_url")))
                 }
             }
-            return null
+            throw IOException("release $tag has no $ASSET")
         } finally {
             conn.disconnect()
         }

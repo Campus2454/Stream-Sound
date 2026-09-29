@@ -69,6 +69,10 @@ class StreamService : Service() {
 
     @Volatile
     private var capturing = false
+
+    /** The user pressed Quit: end the whole process once cleaned up. */
+    @Volatile
+    private var quitting = false
     private var playbackThread: Thread? = null
     private var captureThread: Thread? = null
     private var projection: MediaProjection? = null
@@ -104,6 +108,8 @@ class StreamService : Service() {
             ACTION_SEND -> startSending(intent)
             ACTION_STOP_SEND -> stopSending()
             ACTION_QUIT -> {
+                quitting = true
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -113,14 +119,19 @@ class StreamService : Service() {
 
     override fun onDestroy() {
         instance = null
-        stopSending()
+        // Clear `running` first: stopSending() re-posts the notification while
+        // running, and a notification posted here outlives the service.
         running = false
+        stopSending()
         playbackThread?.join(1000)
         releaseLocks()
         val h = handle
         handle = 0L
         if (h != 0L) Native.destroy(h)
+        stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
+        // Quit means the whole app, so nothing is left running in the background.
+        if (quitting) Process.killProcess(Process.myPid())
     }
 
     // ---- foreground + notification ---------------------------------------

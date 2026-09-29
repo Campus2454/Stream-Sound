@@ -353,6 +353,7 @@ impl App {
                 UpdateStatus::Idle => String::new(),
                 UpdateStatus::Checking => t("กำลังตรวจสอบอัปเดต…"),
                 UpdateStatus::UpToDate => t("เป็นเวอร์ชันล่าสุดแล้ว"),
+                UpdateStatus::NoRelease => t("ยังไม่มีเวอร์ชันที่เผยแพร่บน GitHub"),
                 UpdateStatus::Downloading { release, percent } => {
                     t(format!("กำลังดาวน์โหลด build {} ({percent}%)", release.build))
                 }
@@ -360,7 +361,10 @@ impl App {
                 UpdateStatus::Failed(e) => t(format!("ตรวจสอบอัปเดตไม่ได้: {e}")),
             };
             ui.label(RichText::new(text).weak().size(13.0));
-            let idle = matches!(status, UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Failed(_));
+            let idle = matches!(
+                status,
+                UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::NoRelease | UpdateStatus::Failed(_)
+            );
             if idle && ui.small_button(t("ตรวจสอบอัปเดต")).clicked() {
                 self.last_update_check = Instant::now();
                 *self.update.lock() = UpdateStatus::Idle;
