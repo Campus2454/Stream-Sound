@@ -74,6 +74,9 @@ pub fn run(key: &str, _opts: &CaptureOptions, mut sink: SampleSink, stop: &Atomi
     let event = client.set_get_eventhandle().map_err(|e| anyhow!("{e}"))?;
     let capture = client.get_audiocaptureclient().map_err(|e| anyhow!("{e}"))?;
     client.start_stream().map_err(|e| anyhow!("{e}"))?;
+    // One engine period (usually 10 ms) plus our 5 ms blocks.
+    let period_us = client.get_device_period().map(|(def, _)| def as u64 / 10).unwrap_or(10_000);
+    super::CAPTURE_LATENCY_US.store(period_us + 5_000, std::sync::atomic::Ordering::Relaxed);
 
     let mut queue: VecDeque<u8> = VecDeque::with_capacity(block * RATE as usize / 10);
     let mut samples = vec![0.0f32; CHUNK_FRAMES * CH];

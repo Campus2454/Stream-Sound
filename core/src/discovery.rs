@@ -51,6 +51,45 @@ fn bind_shared(port: u16) -> std::io::Result<UdpSocket> {
     Ok(s.into())
 }
 
+/// Virtual adapters (VMs, containers) other devices can't reach.
+fn is_virtual(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["docker", "veth", "br-", "virbr", "vethernet", "virtualbox", "vmware", "vmnet", "wsl"]
+        .iter()
+        .any(|p| n.starts_with(p) || n.contains(p))
+}
+
+/// This device's IPv4 LAN addresses, the one the OS routes through first.
+pub fn local_ips() -> Vec<Ipv4Addr> {
+    let mut v = Vec::new();
+    // The address used to reach the internet; connecting a UDP socket sends nothing.
+    if let Ok(s) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) {
+        if s.connect((Ipv4Addr::new(8, 8, 8, 8), 53)).is_ok() {
+            if let Ok(SocketAddr::V4(a)) = s.local_addr() {
+                if !a.ip().is_unspecified() && !a.ip().is_loopback() {
+                    v.push(*a.ip());
+                }
+            }
+        }
+    }
+    let mut others: Vec<Ipv4Addr> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| !i.is_loopback() && !is_virtual(&i.name))
+        .filter_map(|i| match i.addr {
+            if_addrs::IfAddr::V4(a) if !a.ip.is_link_local() => Some(a.ip),
+            _ => None,
+        })
+        .collect();
+    others.sort_by_key(|ip| !ip.is_private());
+    for ip in others {
+        if !v.contains(&ip) {
+            v.push(ip);
+        }
+    }
+    v
+}
+
 fn broadcast_targets() -> Vec<SocketAddr> {
     let mut v: Vec<SocketAddr> = if_addrs::get_if_addrs()
         .unwrap_or_default()

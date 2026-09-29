@@ -1,13 +1,13 @@
 //! Command-line mode, handy for testing and for headless relays.
 //!
-//!   stream-sound recv  [--port 47800] [--latency 20] [--forward IP[:PORT],..] [--no-play] [--seconds N]
-//!   stream-sound send  --to IP[:PORT],.. [--source system|tone|app:NAME|input:NAME] [--seconds N]
+//!   stream-sound recv  [--port 47800] [--mode game|balanced|music] [--forward IP[:PORT],..] [--no-play] [--seconds N]
+//!   stream-sound send  --to IP[:PORT],.. [--source system|tone|app:NAME|input:NAME] [--mode ...] [--seconds N]
 //!   stream-sound sources
 //!   stream-sound peers
 //!   stream-sound update     # install the latest GitHub release over this file
 
 use ssnd_core::proto::DEFAULT_AUDIO_PORT;
-use ssnd_core::{list_sources, Engine, EngineConfig, Source};
+use ssnd_core::{list_sources, Engine, EngineConfig, Mode, Source};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
@@ -43,8 +43,8 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     if let Some(p) = arg(&args, "--port").and_then(|s| s.parse().ok()) {
         cfg.audio_port = p;
     }
-    if let Some(l) = arg(&args, "--latency").and_then(|s| s.parse().ok()) {
-        cfg.latency_ms = l;
+    if let Some(m) = arg(&args, "--mode") {
+        cfg.mode = Mode::parse(&m).ok_or_else(|| anyhow::anyhow!("--mode must be game, balanced or music"))?;
     }
     if let Some(n) = arg(&args, "--name") {
         cfg.name = n;
@@ -84,22 +84,27 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
             }
             e.set_play_local(!args.iter().any(|a| a == "--no-play"));
             e.start_receiving()?;
-            println!("receiving on port {}", e.audio_port);
+            let ips: Vec<String> = e.local_ips().iter().map(|i| i.to_string()).collect();
+            println!("receiving on {} port {} ({} mode)", ips.join(", "), e.audio_port, e.mode().as_str());
             loop {
                 std::thread::sleep(Duration::from_secs(1));
                 if let Some(err) = e.receiver_error() {
                     println!("output: {err}");
                 }
+                let out_ms = e.output_latency_ms();
                 for s in e.streams() {
                     println!(
-                        "stream {:08x} '{}' from {} {}Hz/{}ch buf={:.1}ms target={:.0}ms lost={} late={} underruns={} level={:.2}",
-                        s.id, s.name, s.from, s.sample_rate, s.channels, s.buffer_ms, s.target_ms, s.lost, s.late, s.underruns, s.level
+                        "stream {:08x} '{}' from {} {}Hz/{}ch delay~{:.0}ms (capture {:.1} + buffer {:.1} + speaker {:.1}) target={:.1}ms lost={} late={} underruns={} level={:.2}",
+                        s.id, s.name, s.from, s.sample_rate, s.channels,
+                        s.capture_ms + s.buffer_ms + out_ms, s.capture_ms, s.buffer_ms, out_ms,
+                        s.target_ms, s.lost, s.late, s.underruns, s.level
                     );
                 }
                 println!(
-                    "output {} Hz, block {} frames",
+                    "output {} Hz, block {} frames, speaker delay {:.1} ms",
                     ssnd_core::engine::OUTPUT_RATE.load(std::sync::atomic::Ordering::Relaxed),
-                    ssnd_core::engine::OUTPUT_BLOCK_FRAMES.load(std::sync::atomic::Ordering::Relaxed)
+                    ssnd_core::engine::OUTPUT_BLOCK_FRAMES.load(std::sync::atomic::Ordering::Relaxed),
+                    out_ms
                 );
                 if e.forwarded_packets() > 0 {
                     println!("forwarded {} packets", e.forwarded_packets());
@@ -118,7 +123,13 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
             loop {
                 std::thread::sleep(Duration::from_secs(1));
                 let s = e.sender_stats();
-                println!("sent {} packets level={:.2} {}", s.packets, s.level, s.error.unwrap_or_default());
+                println!(
+                    "sent {} packets level={:.2} capture delay {:.1} ms {}",
+                    s.packets,
+                    s.level,
+                    s.capture_ms,
+                    s.error.unwrap_or_default()
+                );
                 if deadline.map(|d| Instant::now() > d).unwrap_or(false) {
                     return Ok(());
                 }

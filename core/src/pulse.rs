@@ -49,6 +49,7 @@ type NewFn = unsafe extern "C" fn(
 type ReadFn = unsafe extern "C" fn(s: *mut c_void, data: *mut c_void, bytes: usize, error: *mut c_int) -> c_int;
 type WriteFn = unsafe extern "C" fn(s: *mut c_void, data: *const c_void, bytes: usize, error: *mut c_int) -> c_int;
 type FreeFn = unsafe extern "C" fn(s: *mut c_void);
+type LatencyFn = unsafe extern "C" fn(s: *mut c_void, error: *mut c_int) -> u64;
 type StrErrorFn = unsafe extern "C" fn(error: c_int) -> *const c_char;
 
 struct Api {
@@ -58,6 +59,7 @@ struct Api {
     read: ReadFn,
     write: WriteFn,
     free: FreeFn,
+    latency: LatencyFn,
     strerror: StrErrorFn,
 }
 
@@ -73,8 +75,9 @@ fn api() -> Result<&'static Api, String> {
         let read = *simple.get::<ReadFn>(b"pa_simple_read\0").map_err(missing)?;
         let write = *simple.get::<WriteFn>(b"pa_simple_write\0").map_err(missing)?;
         let free = *simple.get::<FreeFn>(b"pa_simple_free\0").map_err(missing)?;
+        let latency = *simple.get::<LatencyFn>(b"pa_simple_get_latency\0").map_err(missing)?;
         let strerror = *pulse.get::<StrErrorFn>(b"pa_strerror\0").map_err(missing)?;
-        Ok(Api { _simple: simple, _pulse: pulse, new, read, write, free, strerror })
+        Ok(Api { _simple: simple, _pulse: pulse, new, read, write, free, latency, strerror })
     })
     .as_ref()
     .map_err(|e| e.clone())
@@ -156,6 +159,15 @@ impl Stream {
         } else {
             Ok(())
         }
+    }
+
+    /// How long until audio written now is heard (playback), or how old
+    /// audio read now is (record), in microseconds.
+    pub fn latency_us(&self) -> Option<u64> {
+        let mut err: c_int = 0;
+        // SAFETY: `s` is a live stream.
+        let us = unsafe { (self.api.latency)(self.s, &mut err) };
+        (us != u64::MAX).then_some(us)
     }
 
     pub fn write(&self, data: &[f32]) -> Result<(), String> {

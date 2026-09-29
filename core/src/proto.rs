@@ -11,7 +11,8 @@
 //!   12..16 sequence number
 //!   16..20 sample rate
 //!   20     codec (0 = PCM signed 16-bit)
-//!   21..24 reserved
+//!   21     flags (bit 0: first packet after the sender's audio paused)
+//!   22..24 sender's capture delay in 0.1 ms units (0 = unknown)
 //!   24..   payload
 //!
 //! Stream info packet (kind 2): same header, payload is the UTF-8 stream name.
@@ -23,6 +24,9 @@ pub const KIND_AUDIO: u8 = 1;
 pub const KIND_INFO: u8 = 2;
 pub const CODEC_PCM16: u8 = 0;
 pub const DEFAULT_TTL: u8 = 8;
+/// The sender's audio stopped for a while (nothing playing) and started
+/// again, so a gap before this packet is expected and not a network problem.
+pub const FLAG_RESUME: u8 = 1;
 pub const DEFAULT_AUDIO_PORT: u16 = 47800;
 pub const DISCOVERY_PORT: u16 = 47801;
 /// Largest datagram we ever produce or accept.
@@ -38,6 +42,9 @@ pub struct Header {
     pub seq: u32,
     pub sample_rate: u32,
     pub codec: u8,
+    pub flags: u8,
+    /// Capture delay at the sender, in 0.1 ms units (0 = unknown).
+    pub capture_delay: u16,
 }
 
 impl Header {
@@ -52,7 +59,8 @@ impl Header {
         out[12..16].copy_from_slice(&self.seq.to_le_bytes());
         out[16..20].copy_from_slice(&self.sample_rate.to_le_bytes());
         out[20] = self.codec;
-        out[21..24].fill(0);
+        out[21] = self.flags;
+        out[22..24].copy_from_slice(&self.capture_delay.to_le_bytes());
     }
 
     pub fn parse(buf: &[u8]) -> Option<Header> {
@@ -68,6 +76,8 @@ impl Header {
             seq: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
             sample_rate: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
             codec: buf[20],
+            flags: buf[21],
+            capture_delay: u16::from_le_bytes([buf[22], buf[23]]),
         };
         if h.kind == KIND_AUDIO {
             let need = HEADER_LEN + h.frames as usize * h.channels as usize * 2;
@@ -116,6 +126,8 @@ mod tests {
             seq: 42,
             sample_rate: 48_000,
             codec: CODEC_PCM16,
+            flags: FLAG_RESUME,
+            capture_delay: 123,
         };
         let mut buf = vec![0u8; HEADER_LEN + 240 * 4];
         h.write(&mut buf);

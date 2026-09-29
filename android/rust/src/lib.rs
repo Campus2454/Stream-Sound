@@ -7,12 +7,36 @@ use jni::objects::{JFloatArray, JObject, JString};
 use jni::sys::{jboolean, jfloat, jint, jlong, jstring, JNI_TRUE};
 use jni::JNIEnv;
 use parking_lot::{Mutex, RwLock};
+use ssnd_core::capture::CAPTURE_LATENCY_US;
+use ssnd_core::engine::OUTPUT_LATENCY_US;
 use ssnd_core::proto::DEFAULT_AUDIO_PORT;
-use ssnd_core::{Engine, EngineConfig, Source};
+use ssnd_core::{Engine, EngineConfig, Mode, Source};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::Ordering;
+
+#[cfg(target_os = "android")]
+mod aaudio;
+
+#[cfg(target_os = "android")]
+type Player = aaudio::Player;
+
+/// Stand-in so the crate still builds on a desktop host.
+#[cfg(not(target_os = "android"))]
+struct Player;
+
+#[cfg(not(target_os = "android"))]
+impl Player {
+    fn start(_r: ssnd_core::Renderer) -> Result<Player, String> {
+        Err("AAudio is only on Android".into())
+    }
+    fn failed(&self) -> bool {
+        true
+    }
+}
 
 struct Handle {
+    player: Mutex<Option<Player>>,
     engine: RwLock<Engine>,
     render_buf: Mutex<Vec<f32>>,
     capture_buf: Mutex<Vec<f32>>,
@@ -68,18 +92,14 @@ pub extern "system" fn Java_app_streamsound_Native_create(
     mut env: JNIEnv,
     _this: JObject,
     name: JString,
-    latency_ms: jfloat,
+    mode: JString,
 ) -> jlong {
     let name = jstr(&mut env, &name);
+    let mode = Mode::parse(&jstr(&mut env, &mode)).unwrap_or_default();
     guard(0, || {
-        let cfg = EngineConfig {
-            name,
-            audio_port: DEFAULT_AUDIO_PORT,
-            latency_ms: latency_ms as f64,
-            discovery: true,
-            external_output: true,
-        };
+        let cfg = EngineConfig { name, audio_port: DEFAULT_AUDIO_PORT, mode, discovery: true, external_output: true };
         let h = Box::new(Handle {
+            player: Mutex::new(None),
             engine: RwLock::new(Engine::new(cfg)),
             render_buf: Mutex::new(vec![0.0; 4096]),
             capture_buf: Mutex::new(vec![0.0; 4096]),
@@ -93,7 +113,10 @@ pub extern "system" fn Java_app_streamsound_Native_destroy(_env: JNIEnv, _this: 
     if h != 0 {
         guard((), || {
             // SAFETY: pointer came from `create` and the app calls this once.
-            drop(unsafe { Box::from_raw(h as *mut Handle) });
+            let h = unsafe { Box::from_raw(h as *mut Handle) };
+            // Stop the speaker callback before the engine it pulls from goes away.
+            drop(h.player.lock().take());
+            drop(h);
         })
     }
 }
@@ -115,6 +138,57 @@ pub extern "system" fn Java_app_streamsound_Native_stopReceiving(_env: JNIEnv, _
             x.engine.write().stop_receiving();
         }
     })
+}
+
+/// Play received audio through AAudio. Returns "" on success, otherwise why
+/// not (the app then plays through AudioTrack and `render` instead).
+#[no_mangle]
+pub extern "system" fn Java_app_streamsound_Native_startPlayer(mut env: JNIEnv, _this: JObject, h: jlong) -> jstring {
+    let msg = guard("internal error".to_string(), || match handle(h) {
+        Some(x) => {
+            let mut p = x.player.lock();
+            if p.is_some() {
+                return String::new();
+            }
+            match Player::start(x.engine.read().renderer()) {
+                Ok(player) => {
+                    *p = Some(player);
+                    String::new()
+                }
+                Err(e) => e,
+            }
+        }
+        None => "engine not started".into(),
+    });
+    out_str(&mut env, &msg)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_app_streamsound_Native_stopPlayer(_env: JNIEnv, _this: JObject, h: jlong) {
+    guard((), || {
+        if let Some(x) = handle(h) {
+            drop(x.player.lock().take());
+        }
+    })
+}
+
+/// True when the AAudio player gave up (or never started).
+#[no_mangle]
+pub extern "system" fn Java_app_streamsound_Native_playerFailed(_env: JNIEnv, _this: JObject, h: jlong) -> jboolean {
+    let failed = guard(true, || handle(h).map(|x| x.player.lock().as_ref().map(|p| p.failed()).unwrap_or(true)).unwrap_or(true));
+    failed as jboolean
+}
+
+/// Speaker delay measured by the app's AudioTrack fallback, ms.
+#[no_mangle]
+pub extern "system" fn Java_app_streamsound_Native_setOutputLatency(_env: JNIEnv, _this: JObject, _h: jlong, ms: jfloat) {
+    OUTPUT_LATENCY_US.store((ms.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+}
+
+/// Capture delay measured by the app's AudioRecord, ms.
+#[no_mangle]
+pub extern "system" fn Java_app_streamsound_Native_setCaptureLatency(_env: JNIEnv, _this: JObject, _h: jlong, ms: jfloat) {
+    CAPTURE_LATENCY_US.store((ms.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
 }
 
 /// Fill `out` with `frames` frames of mixed audio (interleaved `ch` channels).
@@ -233,11 +307,13 @@ pub extern "system" fn Java_app_streamsound_Native_setVolume(_env: JNIEnv, _this
     })
 }
 
+/// "game", "balanced" or "music".
 #[no_mangle]
-pub extern "system" fn Java_app_streamsound_Native_setLatency(_env: JNIEnv, _this: JObject, h: jlong, ms: jfloat) {
+pub extern "system" fn Java_app_streamsound_Native_setMode(mut env: JNIEnv, _this: JObject, h: jlong, mode: JString) {
+    let mode = jstr(&mut env, &mode);
     guard((), || {
-        if let Some(x) = handle(h) {
-            x.engine.read().set_latency_ms(ms as f64);
+        if let (Some(x), Some(m)) = (handle(h), Mode::parse(&mode)) {
+            x.engine.read().set_mode(m);
         }
     })
 }
@@ -266,13 +342,15 @@ pub extern "system" fn Java_app_streamsound_Native_stateJson(mut env: JNIEnv, _t
             .iter()
             .map(|s| {
                 format!(
-                    r#"{{"id":{},"name":"{}","from":"{}","bufferMs":{:.1},"targetMs":{:.1},"lost":{},"underruns":{},"level":{:.3},"rate":{}}}"#,
+                    r#"{{"id":{},"name":"{}","from":"{}","bufferMs":{:.1},"targetMs":{:.1},"captureMs":{:.1},"lost":{},"late":{},"underruns":{},"level":{:.3},"rate":{}}}"#,
                     s.id,
                     esc(&s.name),
                     esc(&s.from),
                     s.buffer_ms,
                     s.target_ms,
+                    s.capture_ms,
                     s.lost,
+                    s.late,
                     s.underruns,
                     s.level,
                     s.sample_rate
@@ -280,9 +358,15 @@ pub extern "system" fn Java_app_streamsound_Native_stateJson(mut env: JNIEnv, _t
             })
             .collect();
         let st = e.sender_stats();
+        let ips: Vec<String> = e.local_ips().iter().map(|i| format!(r#""{i}""#)).collect();
         format!(
-            r#"{{"name":"{}","receiving":{},"receiverError":"{}","playLocal":{},"forwarded":{},"sending":{},"sentPackets":{},"sendLevel":{:.3},"sendError":"{}","peers":[{}],"streams":[{}]}}"#,
+            r#"{{"name":"{}","ips":[{}],"mode":"{}","outputMs":{:.1},"aaudio":{},"captureMs":{:.1},"receiving":{},"receiverError":"{}","playLocal":{},"forwarded":{},"sending":{},"sentPackets":{},"sendLevel":{:.3},"sendError":"{}","peers":[{}],"streams":[{}]}}"#,
             esc(&e.name),
+            ips.join(","),
+            e.mode().as_str(),
+            e.output_latency_ms(),
+            x.player.lock().as_ref().map(|p| !p.failed()).unwrap_or(false),
+            st.capture_ms,
             e.is_receiving(),
             esc(&e.receiver_error().unwrap_or_default()),
             e.play_local(),

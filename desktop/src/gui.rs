@@ -1,11 +1,12 @@
 //! Desktop window. Simple one-page layout, all text in Thai.
 
+use crate::settings::{self, Settings};
 use crate::updater::{self, Status as UpdateStatus};
 use eframe::egui::{self, Color32, RichText};
 use ssnd_core::proto::DEFAULT_AUDIO_PORT;
-use ssnd_core::{list_sources, Engine, EngineConfig, Peer, Source, SourceInfo, SourceKind};
+use ssnd_core::{list_sources, Engine, EngineConfig, Mode, Peer, Source, SourceInfo, SourceKind};
 use std::collections::BTreeSet;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -115,8 +116,9 @@ struct App {
     sources: Vec<SourceInfo>,
     source_idx: usize,
     keep_local: bool,
-    latency: f64,
-    volume: f32,
+    settings: Settings,
+    ips: Vec<Ipv4Addr>,
+    last_ip_poll: Instant,
     send_to: BTreeSet<String>,
     forward_to: BTreeSet<String>,
     manual: Vec<String>,
@@ -133,14 +135,17 @@ struct App {
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> App {
         setup_style(&cc.egui_ctx);
-        let engine = Engine::new(EngineConfig::default());
+        let settings = settings::load();
+        let engine = Engine::new(EngineConfig { mode: settings.mode, ..EngineConfig::default() });
+        engine.set_volume(settings.volume);
         let mut app = App {
+            ips: engine.local_ips(),
+            last_ip_poll: Instant::now(),
             engine,
             sources: list_sources(),
             source_idx: 0,
             keep_local: false,
-            latency: 20.0,
-            volume: 1.0,
+            settings,
             send_to: BTreeSet::new(),
             forward_to: BTreeSet::new(),
             manual: Vec::new(),
@@ -193,6 +198,35 @@ impl App {
     }
 }
 
+fn mode_label(m: Mode) -> &'static str {
+    match m {
+        Mode::Game => "เกม (หน่วงต่ำสุด)",
+        Mode::Balanced => "สมดุล",
+        Mode::Music => "ฟังเพลง (เสถียรสุด)",
+    }
+}
+
+fn mode_hint(m: Mode) -> &'static str {
+    match m {
+        Mode::Game => "เสียงตรงกับภาพที่สุด เสียงที่มาช้าจะถูกทิ้ง ถ้า Wi-Fi สะดุดอาจได้ยินเสียงแตกสั้น ๆ",
+        Mode::Balanced => "หน่วงต่ำและไม่สะดุด ใช้ได้ทั่วไป (แนะนำ)",
+        Mode::Music => "หน่วงมากขึ้น แต่ทน Wi-Fi ที่ไม่เสถียรได้ดีที่สุด",
+    }
+}
+
+/// "หน่วงรวม ~35 ms (จับเสียง 10 + บัฟเฟอร์ 15 + ลำโพง 10)"
+fn delay_line(s: &ssnd_core::StreamStats, out_ms: f64) -> String {
+    let mut parts = Vec::new();
+    if s.capture_ms > 0.0 {
+        parts.push(format!("จับเสียง {:.0}", s.capture_ms));
+    }
+    parts.push(format!("บัฟเฟอร์ {:.0}", s.buffer_ms));
+    if out_ms > 0.0 {
+        parts.push(format!("ลำโพง {:.0}", out_ms));
+    }
+    format!("หน่วงรวม ~{:.0} ms ({})", s.capture_ms + s.buffer_ms + out_ms, parts.join(" + "))
+}
+
 fn resolve(s: &str) -> Option<SocketAddr> {
     let s = s.trim();
     let full = if s.contains(':') { s.to_string() } else { format!("{s}:{DEFAULT_AUDIO_PORT}") };
@@ -233,6 +267,10 @@ impl eframe::App for App {
             self.peers = self.engine.peers();
             self.last_peer_poll = Instant::now();
         }
+        if self.last_ip_poll.elapsed() > Duration::from_secs(5) {
+            self.ips = self.engine.local_ips();
+            self.last_ip_poll = Instant::now();
+        }
         self.sync_engine();
         if let Some(until) = self.receive_retry_until {
             match self.engine.start_receiving() {
@@ -256,7 +294,12 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Stream Sound").size(26.0).strong().color(RED));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(t(format!("เครื่องนี้: {}", self.engine.name))).weak());
+                        let ip = self.ips.first().map(|i| i.to_string()).unwrap_or_else(|| t("ไม่พบ IP"));
+                        let r = ui.label(RichText::new(t(format!("เครื่องนี้: {} ({ip})", self.engine.name))).weak());
+                        if self.ips.len() > 1 {
+                            let all: Vec<String> = self.ips.iter().map(|i| i.to_string()).collect();
+                            r.on_hover_text(all.join("\n"));
+                        }
                     });
                 });
                 if let Some((m, t)) = &self.message {
@@ -266,6 +309,7 @@ impl eframe::App for App {
                 }
                 self.update_banner(ui);
                 ui.add_space(6.0);
+                self.mode_card(ui);
                 self.send_card(ui);
                 self.receive_card(ui);
                 self.devices_card(ui);
@@ -321,6 +365,22 @@ impl App {
                 self.last_update_check = Instant::now();
                 *self.update.lock() = UpdateStatus::Idle;
                 updater::check_and_download_in_background(self.update.clone());
+            }
+        });
+    }
+
+    fn mode_card(&mut self, ui: &mut egui::Ui) {
+        card(ui, &t("โหมด"), |ui| {
+            let before = self.settings.mode;
+            ui.horizontal_wrapped(|ui| {
+                for m in Mode::ALL {
+                    ui.selectable_value(&mut self.settings.mode, m, t(mode_label(m)));
+                }
+            });
+            ui.label(RichText::new(t(mode_hint(self.settings.mode))).weak().size(13.0));
+            if self.settings.mode != before {
+                self.engine.set_mode(self.settings.mode);
+                settings::save(&self.settings);
             }
         });
     }
@@ -392,6 +452,9 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(t("● กำลังส่ง")).color(RED));
                     ui.label(RichText::new(t(format!("{} แพ็กเก็ต", st.packets))).weak());
+                    if st.capture_ms > 0.0 {
+                        ui.label(RichText::new(t(format!("· จับเสียงหน่วง {:.0} ms", st.capture_ms))).weak());
+                    }
                 });
                 level_bar(ui, st.level);
                 if let Some(e) = st.error {
@@ -420,16 +483,13 @@ impl App {
             if ui.checkbox(&mut play, t("เล่นเสียงที่เครื่องนี้")).changed() {
                 self.engine.set_play_local(play);
             }
-            if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.5).text(t("ระดับเสียง")).show_value(false)).changed() {
-                self.engine.set_volume(self.volume);
+            let vol = ui.add(egui::Slider::new(&mut self.settings.volume, 0.0..=1.5).text(t("ระดับเสียง")).show_value(false));
+            if vol.changed() {
+                self.engine.set_volume(self.settings.volume);
             }
-            if ui
-                .add(egui::Slider::new(&mut self.latency, 5.0..=200.0).text(t("บัฟเฟอร์ (มิลลิวินาที)")).integer())
-                .changed()
-            {
-                self.engine.set_latency_ms(self.latency);
+            if vol.drag_stopped() || (vol.changed() && !vol.dragged()) {
+                settings::save(&self.settings);
             }
-            ui.label(RichText::new(t("น้อย = หน่วงต่ำ, มาก = ทนสัญญาณ Wi-Fi สะดุดได้ดีกว่า")).weak().size(13.0));
             if let Some(e) = self.engine.receiver_error() {
                 ui.colored_label(Color32::from_rgb(0xFF, 0x80, 0x80), t(format!("ลำโพง: {e}")));
             }
@@ -438,14 +498,15 @@ impl App {
             if streams.is_empty() && self.engine.is_receiving() {
                 ui.label(RichText::new(t("รอเสียงจากเครื่องอื่น…")).weak());
             }
-            for s in streams {
+            let out_ms = self.engine.output_latency_ms();
+            for s in &streams {
                 ui.label(RichText::new(t(&s.name)).strong());
+                ui.label(RichText::new(t(delay_line(s, out_ms))).size(14.0));
                 ui.label(
                     RichText::new(t(format!(
-                        "บัฟเฟอร์ {:.0}/{:.0} ms · หาย {} · สะดุด {} · {} kHz",
-                        s.buffer_ms,
-                        s.target_ms,
+                        "หาย {} · มาช้า {} · สะดุด {} · {} kHz",
                         s.lost,
+                        s.late,
                         s.underruns,
                         s.sample_rate as f32 / 1000.0
                     )))
@@ -453,6 +514,9 @@ impl App {
                     .size(13.0),
                 );
                 level_bar(ui, s.level);
+            }
+            if !streams.is_empty() {
+                ui.label(RichText::new(t("ไม่รวมเวลาเดินทางในเครือข่าย (สาย LAN ~1 ms, Wi-Fi ~2–10 ms)")).weak().size(12.0));
             }
 
             ui.add_space(4.0);

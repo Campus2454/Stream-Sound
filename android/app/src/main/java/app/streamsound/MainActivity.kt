@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -70,10 +71,17 @@ private val Muted = Color(0xFF9A9AA0)
 private val ErrorText = Color(0xFFFF8080)
 
 data class PeerInfo(val id: String, val name: String, val addr: String, val receiving: Boolean)
-data class StreamInfo(val name: String, val bufferMs: Double, val targetMs: Double, val lost: Long, val underruns: Long, val level: Float, val rate: Int)
+data class StreamInfo(
+    val name: String, val bufferMs: Double, val targetMs: Double, val captureMs: Double,
+    val lost: Long, val late: Long, val underruns: Long, val level: Float, val rate: Int,
+)
 data class UiState(
     val ready: Boolean = false,
     val name: String = "",
+    val ips: List<String> = emptyList(),
+    val outputMs: Double = 0.0,
+    val aaudio: Boolean = false,
+    val captureMs: Double = 0.0,
     val receiving: Boolean = false,
     val receiverError: String = "",
     val playLocal: Boolean = true,
@@ -91,9 +99,14 @@ private fun parseState(json: String, ready: Boolean): UiState = try {
     val o = JSONObject(json)
     val peers = o.optJSONArray("peers")
     val streams = o.optJSONArray("streams")
+    val ips = o.optJSONArray("ips")
     UiState(
         ready = ready,
         name = o.optString("name"),
+        ips = (0 until (ips?.length() ?: 0)).map { ips!!.optString(it) },
+        outputMs = o.optDouble("outputMs", 0.0),
+        aaudio = o.optBoolean("aaudio"),
+        captureMs = o.optDouble("captureMs", 0.0),
         receiving = o.optBoolean("receiving"),
         receiverError = o.optString("receiverError"),
         playLocal = o.optBoolean("playLocal", true),
@@ -109,13 +122,28 @@ private fun parseState(json: String, ready: Boolean): UiState = try {
         streams = (0 until (streams?.length() ?: 0)).map {
             val s = streams!!.getJSONObject(it)
             StreamInfo(
-                s.optString("name"), s.optDouble("bufferMs"), s.optDouble("targetMs"),
-                s.optLong("lost"), s.optLong("underruns"), s.optDouble("level").toFloat(), s.optInt("rate"),
+                s.optString("name"), s.optDouble("bufferMs"), s.optDouble("targetMs"), s.optDouble("captureMs", 0.0),
+                s.optLong("lost"), s.optLong("late"), s.optLong("underruns"), s.optDouble("level").toFloat(), s.optInt("rate"),
             )
         },
     )
 } catch (e: Exception) {
     UiState(ready = ready)
+}
+
+private val MODES = listOf(
+    Triple("game", "เกม (หน่วงต่ำสุด)", "เสียงตรงกับภาพที่สุด เสียงที่มาช้าจะถูกทิ้ง ถ้า Wi-Fi สะดุดอาจได้ยินเสียงแตกสั้น ๆ"),
+    Triple("balanced", "สมดุล", "หน่วงต่ำและไม่สะดุด ใช้ได้ทั่วไป (แนะนำ)"),
+    Triple("music", "ฟังเพลง (เสถียรสุด)", "หน่วงมากขึ้น แต่ทน Wi-Fi ที่ไม่เสถียรได้ดีที่สุด"),
+)
+
+/** "หน่วงรวม ~35 ms (จับเสียง 10 + บัฟเฟอร์ 15 + ลำโพง 10)" */
+private fun delayLine(s: StreamInfo, outMs: Double): String {
+    val parts = mutableListOf<String>()
+    if (s.captureMs > 0) parts.add("จับเสียง ${s.captureMs.toInt()}")
+    parts.add("บัฟเฟอร์ ${s.bufferMs.toInt()}")
+    if (outMs > 0) parts.add("ลำโพง ${outMs.toInt()}")
+    return "หน่วงรวม ~${(s.captureMs + s.bufferMs + outMs).toInt()} ms (${parts.joinToString(" + ")})"
 }
 
 class MainActivity : ComponentActivity() {
@@ -177,7 +205,7 @@ private fun AppScreen(activity: MainActivity) {
     val manual = remember { mutableStateListOf<String>().apply { addAll(prefs.getStringSet("manual", emptySet())!!.sorted()) } }
     var manualInput by remember { mutableStateOf("") }
     var volume by remember { mutableFloatStateOf(prefs.getFloat("volume", 1f)) }
-    var latency by remember { mutableFloatStateOf(prefs.getFloat("latency", 30f)) }
+    var latencyMode by remember { mutableStateOf(prefs.getString(StreamService.PREF_LATENCY_MODE, "balanced") ?: "balanced") }
     var message by remember { mutableStateOf("") }
     var pendingDests by remember { mutableStateOf("") }
 
@@ -224,7 +252,7 @@ private fun AppScreen(activity: MainActivity) {
             if (svc != null && svc.handle != 0L) {
                 if (!applied) {
                     Native.setVolume(svc.handle, volume)
-                    Native.setLatency(svc.handle, latency)
+                    Native.setMode(svc.handle, latencyMode)
                     applied = true
                 }
                 state = parseState(Native.stateJson(svc.handle), true)
@@ -235,6 +263,14 @@ private fun AppScreen(activity: MainActivity) {
             }
             delay(250)
         }
+    }
+
+    // Phones cut Wi-Fi power saving only while the screen is on, so keep it on
+    // while audio is flowing and this app is open.
+    val streaming = state.sending || state.streams.isNotEmpty()
+    LaunchedEffect(streaming) {
+        if (streaming) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     // Every destination the user can tick: discovered devices plus typed IPs.
@@ -314,7 +350,11 @@ private fun AppScreen(activity: MainActivity) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Stream Sound", color = Red, fontSize = 26.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
-            Text(if (state.ready) "เครื่องนี้: ${state.name}" else "กำลังเริ่ม…", color = Muted, fontSize = 13.sp)
+            Text(
+                if (!state.ready) "กำลังเริ่ม…"
+                else "เครื่องนี้: ${state.name}" + (state.ips.firstOrNull()?.let { " ($it)" } ?: " (ไม่ได้ต่อ Wi-Fi)"),
+                color = Muted, fontSize = 13.sp,
+            )
         }
         if (message.isNotEmpty()) {
             Text(message, color = ErrorText, modifier = Modifier.padding(top = 6.dp).clickable { message = "" })
@@ -342,6 +382,23 @@ private fun AppScreen(activity: MainActivity) {
                     ) { Text("ติดตั้งอัปเดต") }
                 }
             }
+        }
+
+        // ---- latency mode ----
+        Section("โหมด") {
+            MODES.forEach { (id, label, _) ->
+                SourceOption(label, latencyMode == id, true) {
+                    latencyMode = id
+                    prefs.edit().putString(StreamService.PREF_LATENCY_MODE, id).apply()
+                    StreamService.instance?.handle?.takeIf { h -> h != 0L }?.let { h -> Native.setMode(h, id) }
+                }
+            }
+            Text(MODES.firstOrNull { it.first == latencyMode }?.third ?: "", color = Muted, fontSize = 12.sp)
+            Text(
+                "คุณภาพเสียงเท่ากันทุกโหมด (ไม่บีบอัด) ต่างกันแค่ความหน่วงกับความทนต่อ Wi-Fi สะดุด " +
+                    "มือถือหน่วงน้อยสุดเมื่อเปิดแอปนี้ค้างไว้บนจอ",
+                color = Muted, fontSize = 12.sp,
+            )
         }
 
         // ---- send ----
@@ -383,6 +440,7 @@ private fun AppScreen(activity: MainActivity) {
                 BigButton("เริ่มส่งเสียง", Red) { onStartSending() }
             } else {
                 Text("● กำลังส่ง  ${state.sentPackets} แพ็กเก็ต", color = Red)
+                if (state.captureMs > 0) Text("หน่วงตอนจับเสียง ~${state.captureMs.toInt()} ms", color = Muted, fontSize = 12.sp)
                 Level(state.sendLevel)
                 if (state.sendError.isNotEmpty()) Text("ปัญหา: ${state.sendError}", color = ErrorText)
                 BigButton("หยุดส่ง", RedDim) {
@@ -409,22 +467,23 @@ private fun AppScreen(activity: MainActivity) {
                 volume = it
                 StreamService.instance?.handle?.takeIf { h -> h != 0L }?.let { h -> Native.setVolume(h, it) }
             }, onValueChangeFinished = { prefs.edit().putFloat("volume", volume).apply() }, valueRange = 0f..1.5f)
-            Text("บัฟเฟอร์ ${latency.toInt()} มิลลิวินาที", color = Muted)
-            Slider(value = latency, onValueChange = {
-                latency = it
-                StreamService.instance?.handle?.takeIf { h -> h != 0L }?.let { h -> Native.setLatency(h, it) }
-            }, onValueChangeFinished = { prefs.edit().putFloat("latency", latency).apply() }, valueRange = 5f..200f)
-            Text("น้อย = หน่วงต่ำ, มาก = ทนสัญญาณ Wi-Fi สะดุดได้ดีกว่า", color = Muted, fontSize = 12.sp)
             if (state.receiverError.isNotEmpty()) Text("ลำโพง: ${state.receiverError}", color = ErrorText)
             if (state.streams.isEmpty() && state.receiving) Text("รอเสียงจากเครื่องอื่น…", color = Muted)
             state.streams.forEach { s ->
                 Spacer(Modifier.height(6.dp))
                 Text(s.name, fontWeight = FontWeight.Bold)
+                Text(delayLine(s, state.outputMs), fontSize = 13.sp)
                 Text(
-                    "บัฟเฟอร์ ${s.bufferMs.toInt()}/${s.targetMs.toInt()} ms · หาย ${s.lost} · สะดุด ${s.underruns} · ${s.rate / 1000f} kHz",
+                    "หาย ${s.lost} · มาช้า ${s.late} · สะดุด ${s.underruns} · ${s.rate / 1000f} kHz",
                     color = Muted, fontSize = 12.sp,
                 )
                 Level(s.level)
+            }
+            if (state.streams.isNotEmpty()) {
+                Text(
+                    "ไม่รวมเวลาเดินทางใน Wi-Fi (~2–10 ms) · ลำโพง: " + if (state.aaudio) "AAudio" else "AudioTrack",
+                    color = Muted, fontSize = 12.sp,
+                )
             }
             Spacer(Modifier.height(8.dp))
             Text("ส่งต่อเสียงที่รับได้ไปเครื่องอื่น (ต่อเป็นทอด)", fontWeight = FontWeight.Bold)

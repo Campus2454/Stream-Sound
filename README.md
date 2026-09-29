@@ -122,13 +122,37 @@ on `main` is published as a release that installed apps update from. See
 4. ส่งต่อเป็นทอด: บนเครื่องกลาง เปิด "ส่งต่อเสียงที่รับได้ไปเครื่องอื่น" แล้วติ๊กเครื่องถัดไป
    (ปิด "เล่นเสียงที่เครื่องนี้" ได้ถ้าไม่อยากให้เครื่องกลางดังด้วย)
 5. หลายเครื่องส่งมาเครื่องเดียว: ให้ทุกเครื่องส่งมาที่เครื่องเดียวกัน เสียงจะถูกมิกซ์รวมกันเอง
-6. "บัฟเฟอร์": น้อย = หน่วงต่ำ, มาก = ทนสัญญาณ Wi-Fi สะดุดได้ดีกว่า (สาย LAN ลองที่ 5–10 ms, Wi-Fi 20–40 ms)
+6. "โหมด" (ตั้งทั้งฝั่งส่งและฝั่งรับให้ตรงกันจะดีที่สุด):
+   - **เกม (หน่วงต่ำสุด)**: เสียงตรงกับภาพที่สุด เสียงที่มาช้าจะถูกทิ้ง ถ้า Wi-Fi สะดุดอาจได้ยินเสียงแตกสั้น ๆ
+   - **สมดุล** (ค่าเริ่มต้น): หน่วงต่ำและไม่สะดุด ใช้ได้ทั่วไป
+   - **ฟังเพลง (เสถียรสุด)**: หน่วงมากขึ้น แต่ทน Wi-Fi ที่ไม่เสถียรได้ดีที่สุด
+
+   คุณภาพเสียงเท่ากันทุกโหมด (PCM 16-bit ไม่บีบอัด) เพราะการบีบอัดเสียงจะเพิ่มความหน่วง
+   ทุกโหมดปรับบัฟเฟอร์เองตามสภาพเครือข่าย ไม่ต้องตั้งเป็นมิลลิวินาทีอีกแล้ว
+7. ชื่อและ IP ของเครื่องแสดงที่หัวแอป ("เครื่องนี้: ชื่อ (IP)") ใช้พิมพ์ใส่อีกเครื่องได้ถ้าเครื่องไม่ขึ้นเอง
+8. ใต้แต่ละเสียงที่รับอยู่จะบอก "หน่วงรวม" แยกเป็นเวลาจับเสียงที่เครื่องส่ง + บัฟเฟอร์ + ลำโพง
+   (ไม่รวมเวลาเดินทางในเครือข่าย: สาย LAN ~1 ms, Wi-Fi ~2–10 ms)
+
+### ความหน่วงที่ทำได้จริง
+
+ความหน่วงระดับ "ไม่กี่มิลลิวินาที" ทำไม่ได้ทางกายภาพ: ลำโพงของระบบเองก็ใช้ 5–20 ms แล้ว
+และ Wi-Fi มีช่วงสะดุด 5–30 ms เป็นปกติ ตัวเลขที่คาดได้ในโหมดเกม:
+
+| เส้นทาง | หน่วงรวมโดยประมาณ |
+|---|---|
+| PC → PC ผ่านสาย LAN | 20–30 ms |
+| PC → มือถือ ผ่าน Wi-Fi ที่ดี (แอปเปิดค้างบนจอ) | 40–60 ms |
+| มือถือ → PC (จับเสียงบน Android เพิ่มเอง ~20–40 ms) | 60–90 ms |
+| มือถือจอดับ (Wi-Fi เข้าโหมดประหยัดไฟ) | เพิ่มได้อีก ~100 ms |
+
+เคล็ดลับ: ใช้สาย LAN ถ้าได้, ให้มือถืออยู่ใกล้เราเตอร์และใช้ 5 GHz, เปิดแอปค้างบนจอระหว่างเล่นเกม
+(แอปจะไม่ให้จอดับเองระหว่างสตรีม)
 
 ## Command line (testing / headless relay)
 
 ```
-stream-sound recv  [--port 47800] [--latency 20] [--forward IP[:PORT],..] [--no-play]
-stream-sound send  --to IP[:PORT],.. [--source system|tone|app:NAME|input:NAME]
+stream-sound recv  [--port 47800] [--mode game|balanced|music] [--forward IP[:PORT],..] [--no-play]
+stream-sound send  --to IP[:PORT],.. [--source system|tone|app:NAME|input:NAME] [--mode game|balanced|music]
 stream-sound sources     # list capturable sources
 stream-sound peers       # list devices on the LAN
 stream-sound update      # download and install the newest release
@@ -137,25 +161,45 @@ stream-sound update      # download and install the newest release
 ## How it works
 
 - **Transport:** UDP, port 47800 (audio) and 47801 (discovery broadcast).
-  5 ms packets of uncompressed 16-bit PCM at the source's sample rate
-  (≈1.5 Mbit/s for 48 kHz stereo: lossless, no codec delay).
-- **Receiver:** one jitter buffer per source, adaptive target (grows 5 ms after an
-  underrun, shrinks back after 20 s stable), gentle playback-speed correction
-  (±0.6 %) for clock drift, Catmull-Rom resampling to the speaker's rate,
-  packet-loss concealment, then all sources mixed with a soft limiter.
+  Uncompressed 16-bit PCM at the source's sample rate (≈1.5 Mbit/s for
+  48 kHz stereo: lossless, no codec delay), 2.5 ms packets in game mode and
+  5 ms otherwise. Each packet carries the sender's capture delay and a flag
+  when the sender's audio resumes after silence, so a pause is never mistaken
+  for a network glitch.
+- **Receiver:** one jitter buffer per source. Every second it measures how far
+  the buffer dipped below its average and sizes itself from the recent worst
+  dips plus a small margin (2 ms game, 5 ms balanced, 15 ms music). Excess is
+  removed by playing up to 2 % faster or, when large, by a 2.5 ms crossfade
+  skip. Late or lost packets are waited for only until they are due, then
+  concealed by repeating the last few milliseconds with a fade; in game mode
+  audio that arrives after its time is dropped so sound stays in sync with
+  the picture. Catmull-Rom resampling to the speaker's rate, then all sources
+  mixed with a soft limiter.
+- **Delay reporting:** capture delay (from PulseAudio, WASAPI or Android's
+  AudioRecord timestamps), buffer, and speaker delay (PulseAudio latency, cpal
+  timestamps, AAudio/AudioTrack timestamps) are shown separately.
+- **Scheduling:** audio and network threads ask for higher priority
+  (TIME_CRITICAL/HIGHEST on Windows; nice -19/-16 on Linux and Android where
+  the system allows it).
 - **Daisy-chain:** a relay forwards each packet the moment it arrives, before any
   buffering, so each hop adds well under 1 ms. A hop counter stops loops.
 - **Stability:** capture and playback run in their own threads and reconnect by
   themselves when a device changes or disappears; panics inside the network
   loop are caught and the loop restarts.
-- **Android:** the Kotlin app (`android/`) owns the speaker (low-latency
-  `AudioTrack`) and capture (`AudioRecord` with playback capture or the mic)
-  and moves audio in and out of the same Rust engine through JNI
-  (`android/rust`). A foreground service with Wi-Fi low-latency and wake locks
-  keeps it running with the screen off.
+- **Android:** the speaker is driven by AAudio from Rust (low-latency mode,
+  exclusive MMAP in game mode where the phone supports it), starting at two
+  hardware bursts of buffer and growing one burst per underrun. If AAudio
+  can't open, the Kotlin app falls back to a low-latency `AudioTrack` tuned the
+  same way. Capture is `AudioRecord` (playback capture or the mic) in the
+  Kotlin app, pushed into the same Rust engine through JNI (`android/rust`).
+  A foreground service with Wi-Fi low-latency and wake locks keeps it running
+  with the screen off; the screen is kept on while streaming with the app
+  open, because phones only drop Wi-Fi power saving with the screen on.
 - **Capture:**
   - Windows: WASAPI loopback (whole system), process loopback (one app, needs
-    Windows 10 2004+), any input device.
+    Windows 10 2004+), any input device. System capture keeps a silent
+    output stream open on the same device so loopback keeps delivering audio
+    in real time even when nothing else is playing.
   - Linux: PulseAudio/PipeWire monitor (whole system); per-app by moving the
     app's streams to a private sink, which is removed on stop. libpulse is
     loaded at run time, so the binary links nothing but glibc.
@@ -169,8 +213,13 @@ stream-sound update      # download and install the newest release
   output: correct pitch, zero clicks or dropouts.
 - One sender to two receivers, two senders mixed on one receiver, and a
   two-hop daisy-chain: 125 s soak, 25,000 packets, 0 lost, 0 underruns.
-- Measured path latency is roughly 5 ms capture + 5 ms packet + the buffer
-  setting (20 ms default) + ~15 ms speaker buffer.
+- Click test in game mode (packet sent until it leaves the sound server):
+  19–26 ms, of which ~10–14 ms is the jitter buffer and ~12 ms the sound
+  server's own output buffer. Balanced settles at ~30 ms buffer, music ~65 ms.
+- Simulated Wi-Fi (2 ms base delay with jitter, 0.3 % loss, a 25 ms stall
+  every ~4 s): game ~32 ms with occasional short concealments,
+  balanced ~45 ms with none. Simulated phone Wi-Fi power save (packets only at
+  102 ms beacons): balanced adapts to ~130 ms.
 
 ## Build from source
 

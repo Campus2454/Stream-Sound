@@ -2,6 +2,7 @@
 
 mod cli;
 mod gui;
+mod settings;
 mod updater;
 
 fn main() {

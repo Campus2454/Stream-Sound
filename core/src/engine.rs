@@ -4,7 +4,7 @@
 
 use crate::capture::{self, CaptureHandle, CaptureOptions, Source};
 use crate::discovery::{Announce, Discovery, Peer};
-use crate::jitter::{Mixer, StreamBuffer, StreamEntry, StreamStats};
+use crate::jitter::{Mixer, Mode, StreamBuffer, StreamEntry, StreamStats};
 use crate::proto::*;
 use anyhow::Context;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -14,22 +14,37 @@ use cpal::{BufferSize, SampleFormat, StreamConfig};
 use parking_lot::{Mutex, RwLock};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const STREAM_TIMEOUT: Duration = Duration::from_secs(2);
+const STREAM_TIMEOUT: Duration = Duration::from_secs(3);
+/// No captured audio for this long means the source went quiet (nothing
+/// playing); the next packet tells receivers not to count the gap as a glitch.
+const SENDER_PAUSE: Duration = Duration::from_millis(80);
+/// Largest UDP payload that fits a standard 1500-byte Ethernet/Wi-Fi frame.
+const MAX_DATAGRAM: usize = 1472;
 
 /// Frames the output device asked for in its most recent callback (diagnostics).
 pub static OUTPUT_BLOCK_FRAMES: AtomicU64 = AtomicU64::new(0);
 /// Output device sample rate (diagnostics).
 pub static OUTPUT_RATE: AtomicU64 = AtomicU64::new(0);
+/// Delay from handing audio to the speaker until it is heard, microseconds (0 = unknown).
+pub static OUTPUT_LATENCY_US: AtomicU64 = AtomicU64::new(0);
+
+fn mode_to_u8(m: Mode) -> u8 {
+    m as u8
+}
+
+fn mode_from_u8(v: u8) -> Mode {
+    Mode::ALL.into_iter().find(|m| *m as u8 == v).unwrap_or_default()
+}
 
 pub struct EngineConfig {
     pub name: String,
     pub audio_port: u16,
-    pub latency_ms: f64,
+    pub mode: Mode,
     pub discovery: bool,
     /// The host app pulls audio with `Engine::render` instead of the engine
     /// opening the speaker itself (Android, iOS).
@@ -41,7 +56,7 @@ impl Default for EngineConfig {
         EngineConfig {
             name: gethostname::gethostname().to_string_lossy().into_owned(),
             audio_port: DEFAULT_AUDIO_PORT,
-            latency_ms: 20.0,
+            mode: Mode::default(),
             discovery: true,
             external_output: cfg!(target_os = "android"),
         }
@@ -54,6 +69,23 @@ pub struct SenderStats {
     pub packets: u64,
     pub level: f32,
     pub error: Option<String>,
+    /// Capture delay on this device, ms (0 = unknown).
+    pub capture_ms: f64,
+}
+
+/// See [`Engine::renderer`].
+#[derive(Clone)]
+pub struct Renderer(Arc<Mutex<Mixer>>);
+
+impl Renderer {
+    /// Fill `out` (interleaved, `ch` channels at `rate`); silence when nothing is received.
+    pub fn render(&self, out: &mut [f32], rate: u32, ch: usize) {
+        self.0.lock().render(out, rate, ch);
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.0.lock().mode
+    }
 }
 
 pub struct Engine {
@@ -70,6 +102,7 @@ pub struct Engine {
     sender: Option<Sender>,
     send_dests: Arc<RwLock<Vec<SocketAddr>>>,
     external_output: bool,
+    mode: Arc<AtomicU8>,
 }
 
 fn random_u32() -> u32 {
@@ -103,7 +136,7 @@ impl Engine {
             audio_port: cfg.audio_port,
             discovery,
             receiving_flag,
-            mixer: Arc::new(Mutex::new(Mixer::new(cfg.latency_ms))),
+            mixer: Arc::new(Mutex::new(Mixer::new(cfg.mode))),
             forward: Arc::default(),
             play_local: Arc::new(AtomicBool::new(true)),
             forwarded: Arc::default(),
@@ -111,7 +144,28 @@ impl Engine {
             sender: None,
             send_dests: Arc::default(),
             external_output: cfg.external_output,
+            mode: Arc::new(AtomicU8::new(mode_to_u8(cfg.mode))),
         }
+    }
+
+    /// This device's LAN addresses, the one other devices should use first.
+    pub fn local_ips(&self) -> Vec<Ipv4Addr> {
+        crate::discovery::local_ips()
+    }
+
+    /// Latency/stability trade-off for both receiving and sending.
+    pub fn set_mode(&self, mode: Mode) {
+        self.mode.store(mode_to_u8(mode), Ordering::Relaxed);
+        self.mixer.lock().set_mode(mode);
+    }
+
+    pub fn mode(&self) -> Mode {
+        mode_from_u8(self.mode.load(Ordering::Relaxed))
+    }
+
+    /// Speaker delay on this device, ms (0 = unknown).
+    pub fn output_latency_ms(&self) -> f64 {
+        OUTPUT_LATENCY_US.load(Ordering::Relaxed) as f64 / 1000.0
     }
 
     pub fn peers(&self) -> Vec<Peer> {
@@ -178,8 +232,10 @@ impl Engine {
         self.mixer.lock().volume = v.clamp(0.0, 2.0);
     }
 
-    pub fn set_latency_ms(&self, ms: f64) {
-        self.mixer.lock().set_base_target(ms.clamp(5.0, 250.0));
+    /// Something an audio callback the app owns (Android's AAudio player)
+    /// can pull mixed audio from without going through the engine.
+    pub fn renderer(&self) -> Renderer {
+        Renderer(self.mixer.clone())
     }
 
     pub fn streams(&self) -> Vec<StreamStats> {
@@ -214,7 +270,7 @@ impl Engine {
             Source::Input { name } => format!("{} · {}", self.name, name),
             _ => self.name.clone(),
         };
-        self.sender = Some(Sender::start(source, name, self.send_dests.clone(), keep_local)?);
+        self.sender = Some(Sender::start(source, name, self.send_dests.clone(), keep_local, self.mode.clone())?);
         Ok(())
     }
 
@@ -238,6 +294,7 @@ impl Engine {
                 packets: s.packets.load(Ordering::Relaxed),
                 level: f32::from_bits(s.level.load(Ordering::Relaxed) as u32),
                 error: s.capture.last_error(),
+                capture_ms: capture::CAPTURE_LATENCY_US.load(Ordering::Relaxed) as f64 / 1000.0,
             },
         }
     }
@@ -288,6 +345,7 @@ impl Receiver {
             let stop = stop.clone();
             let mixer = mixer.clone();
             threads.push(thread::Builder::new().name("ssnd-net-rx".into()).spawn(move || {
+                crate::rt::boost_current_thread(crate::rt::Priority::Network);
                 // Restart the loop if anything inside ever panics.
                 while !stop.load(Ordering::Relaxed) {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -300,6 +358,7 @@ impl Receiver {
             let stop = stop.clone();
             let error = error.clone();
             threads.push(thread::Builder::new().name("ssnd-output".into()).spawn(move || {
+                crate::rt::boost_current_thread(crate::rt::Priority::Audio);
                 while !stop.load(Ordering::Relaxed) {
                     match run_output(&mixer, &stop) {
                         Ok(()) => *error.lock() = None,
@@ -362,16 +421,17 @@ fn net_loop(
                 let len = h.frames as usize * h.channels as usize * 2;
                 decode_pcm16(&pkt[HEADER_LEN..HEADER_LEN + len], &mut samples);
                 let mut m = mixer.lock();
-                let base = m.base_target_ms;
+                let mode = m.mode;
                 let entry = m.streams.entry(h.stream_id).or_insert_with(|| StreamEntry {
-                    buf: StreamBuffer::new(h.sample_rate, h.channels as usize, base),
+                    buf: StreamBuffer::new(h.sample_rate, h.channels as usize, mode),
                     name: from.ip().to_string(),
                     from: from.ip().to_string(),
                 });
                 if entry.buf.format() != (h.sample_rate, h.channels as usize) {
-                    entry.buf = StreamBuffer::new(h.sample_rate, h.channels as usize, base);
+                    entry.buf = StreamBuffer::new(h.sample_rate, h.channels as usize, mode);
                 }
-                entry.buf.push(h.seq, &samples);
+                entry.buf.capture_ms = h.capture_delay as f64 / 10.0;
+                entry.buf.push(h.seq, h.flags, &samples);
             }
             KIND_INFO => {
                 let name = String::from_utf8_lossy(&pkt[HEADER_LEN..]).into_owned();
@@ -402,9 +462,16 @@ fn run_output(mixer: &Arc<Mutex<Mixer>>, stop: &AtomicBool) -> anyhow::Result<()
     OUTPUT_RATE.store(RATE as u64, Ordering::Relaxed);
     OUTPUT_BLOCK_FRAMES.store(CHUNK as u64, Ordering::Relaxed);
     let mut samples = vec![0.0f32; CHUNK * CH];
+    let mut n = 0u32;
     while !stop.load(Ordering::Relaxed) {
         mixer.lock().render(&mut samples, RATE, CH);
         s.write(&samples).map_err(|e| anyhow::anyhow!("speaker write failed: {e}"))?;
+        n = n.wrapping_add(1);
+        if n % 100 == 1 {
+            if let Some(us) = s.latency_us() {
+                OUTPUT_LATENCY_US.store(us, Ordering::Relaxed);
+            }
+        }
     }
     Ok(())
 }
@@ -463,6 +530,15 @@ fn run_output(mixer: &Arc<Mutex<Mixer>>, stop: &AtomicBool) -> anyhow::Result<()
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("could not open output")))
 }
 
+/// Speaker delay as the driver reports it: when this block will be heard.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn note_output(info: &cpal::OutputCallbackInfo) {
+    let ts = info.timestamp();
+    if let Some(d) = ts.playback.duration_since(&ts.callback) {
+        OUTPUT_LATENCY_US.store(d.as_micros() as u64, Ordering::Relaxed);
+    }
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 #[allow(clippy::too_many_arguments)]
 fn build_output(
@@ -485,7 +561,8 @@ fn build_output(
     let stream = match format {
         SampleFormat::F32 => device.build_output_stream(
             config,
-            move |out: &mut [f32], _| {
+            move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                note_output(info);
                 OUTPUT_BLOCK_FRAMES.store((out.len() / ch.max(1)) as u64, Ordering::Relaxed);
                 beat.fetch_add(1, Ordering::Relaxed);
                 mixer.lock().render(out, rate, ch)
@@ -495,7 +572,8 @@ fn build_output(
         )?,
         SampleFormat::I16 => device.build_output_stream(
             config,
-            move |out: &mut [i16], _| {
+            move |out: &mut [i16], info: &cpal::OutputCallbackInfo| {
+                note_output(info);
                 if scratch.len() < out.len() {
                     scratch.resize(out.len(), 0.0);
                 }
@@ -512,7 +590,8 @@ fn build_output(
         )?,
         SampleFormat::I32 => device.build_output_stream(
             config,
-            move |out: &mut [i32], _| {
+            move |out: &mut [i32], info: &cpal::OutputCallbackInfo| {
+                note_output(info);
                 if scratch.len() < out.len() {
                     scratch.resize(out.len(), 0.0);
                 }
@@ -543,7 +622,13 @@ struct Sender {
 }
 
 impl Sender {
-    fn start(source: Source, name: String, dests: Arc<RwLock<Vec<SocketAddr>>>, keep_local: bool) -> anyhow::Result<Sender> {
+    fn start(
+        source: Source,
+        name: String,
+        dests: Arc<RwLock<Vec<SocketAddr>>>,
+        keep_local: bool,
+        mode: Arc<AtomicU8>,
+    ) -> anyhow::Result<Sender> {
         let sock = udp_socket(0)?;
         sock.set_nonblocking(true)?;
         let packets = Arc::new(AtomicU64::new(0));
@@ -559,6 +644,9 @@ impl Sender {
             packets: packets.clone(),
             level: level.clone(),
             peak: 0.0,
+            mode,
+            last_push: None,
+            resume: true,
         }));
         let p = packetizer.clone();
         let capture = capture::start(source, CaptureOptions { keep_local }, Box::new(move |d, r, c| p.lock().push(d, r, c)));
@@ -578,6 +666,10 @@ struct Packetizer {
     packets: Arc<AtomicU64>,
     level: Arc<AtomicU64>,
     peak: f32,
+    mode: Arc<AtomicU8>,
+    last_push: Option<Instant>,
+    /// Mark the next packet as the first after a pause.
+    resume: bool,
 }
 
 impl Packetizer {
@@ -585,14 +677,23 @@ impl Packetizer {
         if ch == 0 || rate == 0 {
             return;
         }
+        let now = Instant::now();
+        if self.last_push.is_some_and(|t| now.duration_since(t) > SENDER_PAUSE) {
+            // The source went quiet (nothing playing) and came back.
+            self.pending.clear();
+            self.resume = true;
+        }
+        self.last_push = Some(now);
         let out_ch = ch.min(2);
         // Keep first two channels (front L/R) for surround sources.
         for frame in data.chunks_exact(ch) {
             self.pending.extend_from_slice(&frame[..out_ch]);
             self.peak = self.peak.max(frame[0].abs());
         }
-        // 5 ms packets: small enough for low latency, big enough for Wi-Fi.
-        let frames = (rate / 200).max(1) as usize;
+        // Packet length from the mode, but never bigger than one network frame.
+        let ms = mode_from_u8(self.mode.load(Ordering::Relaxed)).packet_ms();
+        let max_frames = (MAX_DATAGRAM - HEADER_LEN) / (out_ch * 2);
+        let frames = ((rate as f64 * ms / 1000.0).round() as usize).clamp(1, max_frames);
         let per = frames * out_ch;
         while self.pending.len() >= per {
             self.send(&self.pending[..per].to_vec(), frames, out_ch, rate);
@@ -611,7 +712,10 @@ impl Packetizer {
             seq: self.seq,
             sample_rate: rate,
             codec: CODEC_PCM16,
+            flags: if self.resume { FLAG_RESUME } else { 0 },
+            capture_delay: (capture::CAPTURE_LATENCY_US.load(Ordering::Relaxed) / 100).min(u16::MAX as u64) as u16,
         };
+        self.resume = false;
         let len = HEADER_LEN + samples.len() * 2;
         if len > self.buf.len() {
             return;
@@ -651,7 +755,7 @@ mod tests {
         let cfg = |port| EngineConfig {
             name: "test".into(),
             audio_port: port,
-            latency_ms: 10.0,
+            mode: Mode::Game,
             discovery: false,
             external_output: true,
         };
@@ -679,5 +783,80 @@ mod tests {
         rx.render(&mut out, 48_000, 2);
         assert!(out.iter().any(|v| v.abs() > 0.2), "audio came out of render");
         assert!(tx.sender_stats().packets >= 40);
+    }
+}
+
+#[cfg(test)]
+mod delay_tests {
+    use super::*;
+
+    /// Real UDP in real time with Game-mode packets: a click must come out of
+    /// render soon after its packet was sent.
+    #[test]
+    fn game_mode_click_delay_is_low() {
+        let frames = 120usize;
+        let mut rx = Engine::new(EngineConfig {
+            name: "rx".into(),
+            audio_port: 47895,
+            mode: Mode::Game,
+            discovery: false,
+            external_output: true,
+        });
+        rx.start_receiving().unwrap();
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let start = Instant::now();
+        let mut sent_frames = 0usize;
+        let mut rendered = 0usize;
+        let mut seq = 0u32;
+        let mut out = vec![0.0f32; 240 * 2];
+        let mut delays = Vec::new();
+        let mut last_click_sent: Option<Instant> = None;
+        let mut buf = vec![0u8; MAX_PACKET];
+        while start.elapsed() < Duration::from_secs(4) {
+            let now_frames = (start.elapsed().as_secs_f64() * 48_000.0) as usize;
+            while sent_frames + frames <= now_frames {
+                let samples: Vec<f32> = (0..frames)
+                    .flat_map(|i| {
+                        let v = if (sent_frames + i) % 19_200 < 48 { 0.6 } else { 0.0 };
+                        [v, v]
+                    })
+                    .collect();
+                if samples.iter().any(|v| *v > 0.0) {
+                    last_click_sent = Some(Instant::now());
+                }
+                let h = Header {
+                    kind: KIND_AUDIO,
+                    ttl: 1,
+                    channels: 2,
+                    frames: frames as u16,
+                    stream_id: 7,
+                    seq,
+                    sample_rate: 48_000,
+                    codec: CODEC_PCM16,
+                    flags: 0,
+                    capture_delay: 0,
+                };
+                h.write(&mut buf);
+                let len = HEADER_LEN + samples.len() * 2;
+                encode_pcm16(&samples, &mut buf[HEADER_LEN..len]);
+                sock.send_to(&buf[..len], "127.0.0.1:47895").unwrap();
+                seq += 1;
+                sent_frames += frames;
+            }
+            while rendered + 240 <= now_frames {
+                rx.render(&mut out, 48_000, 2);
+                rendered += 240;
+                if out.iter().any(|v| v.abs() > 0.3) {
+                    if let Some(t) = last_click_sent.take() {
+                        delays.push(t.elapsed().as_secs_f64() * 1000.0);
+                    }
+                }
+            }
+            thread::sleep(Duration::from_micros(200));
+        }
+        assert!(delays.len() >= 5, "clicks came through: {delays:?}");
+        delays.sort_by(|a, b| a.total_cmp(b));
+        let median = delays[delays.len() / 2];
+        assert!(median < 60.0, "median click delay {median:.1} ms: {delays:?}");
     }
 }

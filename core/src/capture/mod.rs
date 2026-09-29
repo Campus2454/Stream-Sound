@@ -1,7 +1,7 @@
 //! Audio sources: whole-system audio, one app, an input device, or a test tone.
 //! Every source delivers interleaved f32 samples to a callback.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -42,6 +42,10 @@ pub enum SourceKind {
     Input,
     Tone,
 }
+
+/// Delay from sound being played/recorded until capture hands it to us,
+/// microseconds (0 = unknown). Set by whichever source is running.
+pub static CAPTURE_LATENCY_US: AtomicU64 = AtomicU64::new(0);
 
 /// Receives (interleaved samples, sample rate, channels).
 pub type SampleSink = Box<dyn FnMut(&[f32], u32, usize) + Send + 'static>;
@@ -93,12 +97,16 @@ pub fn start(source: Source, opts: CaptureOptions, sink: SampleSink) -> CaptureH
         drop(sink);
         return CaptureHandle { stop, thread: None, error };
     }
+    CAPTURE_LATENCY_US.store(0, Ordering::Relaxed);
     let t = {
         let stop = stop.clone();
         let error = error.clone();
         thread::Builder::new()
             .name("ssnd-capture".into())
-            .spawn(move || run(source, opts, sink, stop, error))
+            .spawn(move || {
+                crate::rt::boost_current_thread(crate::rt::Priority::Audio);
+                run(source, opts, sink, stop, error)
+            })
             .ok()
     };
     CaptureHandle { stop, thread: t, error }

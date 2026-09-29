@@ -6,6 +6,30 @@ use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Delay between sound being played/recorded and our callback getting it.
+fn note_capture(info: &cpal::InputCallbackInfo) {
+    let ts = info.timestamp();
+    if let Some(d) = ts.callback.duration_since(&ts.capture) {
+        super::CAPTURE_LATENCY_US.store(d.as_micros() as u64, Ordering::Relaxed);
+    }
+}
+
+/// Windows loopback delivers nothing while no app is playing, so the stream
+/// would stop and start. Playing silence on the same device keeps it running.
+fn keep_alive(device: &cpal::Device) -> Option<cpal::Stream> {
+    let cfg = device.default_output_config().ok()?;
+    let config: StreamConfig = cfg.config();
+    let stream = match cfg.sample_format() {
+        SampleFormat::F32 => device.build_output_stream(&config, |d: &mut [f32], _| d.fill(0.0), |_| {}, None),
+        SampleFormat::I16 => device.build_output_stream(&config, |d: &mut [i16], _| d.fill(0), |_| {}, None),
+        SampleFormat::I32 => device.build_output_stream(&config, |d: &mut [i32], _| d.fill(0), |_| {}, None),
+        _ => return None,
+    }
+    .ok()?;
+    stream.play().ok()?;
+    Some(stream)
+}
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -51,17 +75,27 @@ pub fn run(source: &Source, sink: SampleSink, stop: &AtomicBool) -> anyhow::Resu
         move |_e: cpal::StreamError| failed.store(true, Ordering::Relaxed)
     };
     let sink = Arc::new(parking_lot::Mutex::new(sink));
+    let _silence = if matches!(source, Source::System) { keep_alive(&device) } else { None };
     let stream = match supported.sample_format() {
         SampleFormat::F32 => {
             let sink = sink.clone();
-            device.build_input_stream(&config, move |d: &[f32], _| (sink.lock())(d, rate, ch), err_fn, None)?
+            device.build_input_stream(
+                &config,
+                move |d: &[f32], info: &cpal::InputCallbackInfo| {
+                    note_capture(info);
+                    (sink.lock())(d, rate, ch)
+                },
+                err_fn,
+                None,
+            )?
         }
         SampleFormat::I16 => {
             let sink = sink.clone();
             let mut tmp = Vec::new();
             device.build_input_stream(
                 &config,
-                move |d: &[i16], _| {
+                move |d: &[i16], info: &cpal::InputCallbackInfo| {
+                    note_capture(info);
                     tmp.clear();
                     tmp.extend(d.iter().map(|s| *s as f32 / 32768.0));
                     (sink.lock())(&tmp, rate, ch)
@@ -75,7 +109,8 @@ pub fn run(source: &Source, sink: SampleSink, stop: &AtomicBool) -> anyhow::Resu
             let mut tmp = Vec::new();
             device.build_input_stream(
                 &config,
-                move |d: &[i32], _| {
+                move |d: &[i32], info: &cpal::InputCallbackInfo| {
+                    note_capture(info);
                     tmp.clear();
                     tmp.extend(d.iter().map(|s| *s as f32 / 2147483648.0));
                     (sink.lock())(&tmp, rate, ch)

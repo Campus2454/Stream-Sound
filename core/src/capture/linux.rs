@@ -101,10 +101,18 @@ fn record(device: &str, mut sink: SampleSink, stop: &AtomicBool, tick: &mut dyn 
     let s = Stream::open(Direction::Record, Some(device), "capture", RATE, CH as u8, &attr)
         .map_err(|e| anyhow!("cannot record from {device}: {e}"))?;
     let mut samples = vec![0.0f32; CHUNK_FRAMES * CH];
+    let chunk_us = CHUNK_FRAMES as u64 * 1_000_000 / RATE as u64;
+    let mut n = 0u32;
     tick();
     while !stop.load(Ordering::Relaxed) {
         s.read(&mut samples).map_err(|e| anyhow!("read from {device} failed: {e}"))?;
         sink(&samples, RATE, CH);
+        n = n.wrapping_add(1);
+        if n % 100 == 1 {
+            if let Some(us) = s.latency_us() {
+                super::CAPTURE_LATENCY_US.store(us + chunk_us, Ordering::Relaxed);
+            }
+        }
         tick();
     }
     Ok(())

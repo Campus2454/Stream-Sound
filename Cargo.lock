@@ -2454,6 +2454,8 @@ name = "ssnd-android"
 version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
+ "libc",
+ "ndk 0.8.0",
  "parking_lot",
  "ssnd-core",
 ]
@@ -2466,11 +2468,13 @@ dependencies = [
  "cpal",
  "gethostname 0.5.0",
  "if-addrs",
+ "libc",
  "libloading",
  "parking_lot",
  "serde_json",
  "socket2",
  "wasapi",
+ "windows 0.62.2",
 ]
 
 [[package]]

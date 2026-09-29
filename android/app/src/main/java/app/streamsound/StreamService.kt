@@ -14,6 +14,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
@@ -51,6 +52,8 @@ class StreamService : Service() {
         const val EXTRA_RESULT_DATA = "resultData"
 
         const val CAPTURE_RATE = 48000
+        const val PREFS = "ui"
+        const val PREF_LATENCY_MODE = "latencyMode"
 
         @Volatile
         var instance: StreamService? = null
@@ -85,7 +88,8 @@ class StreamService : Service() {
         goForeground(withProjection = false, withMic = false)
 
         val name = (Build.MODEL ?: "Android").ifBlank { "Android" }
-        handle = Native.create(name, 30f)
+        val mode = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(PREF_LATENCY_MODE, "balanced") ?: "balanced"
+        handle = Native.create(name, mode)
         val err = Native.startReceiving(handle)
         if (err.isNotEmpty()) lastError = err
 
@@ -188,13 +192,28 @@ class StreamService : Service() {
 
     private fun playbackLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        // AAudio first: it is the lowest-delay path. AudioTrack if it can't open or gives up.
+        val err = Native.startPlayer(handle)
+        if (err.isEmpty()) {
+            while (running && !Native.playerFailed(handle)) {
+                try { Thread.sleep(250) } catch (_: InterruptedException) {}
+            }
+            Native.stopPlayer(handle)
+            if (!running) return
+            Log.w(TAG, "AAudio gave up, playing through AudioTrack")
+        } else {
+            Log.w(TAG, "AAudio unavailable ($err), playing through AudioTrack")
+        }
+        audioTrackLoop()
+    }
+
+    private fun audioTrackLoop() {
         while (running) {
             var track: AudioTrack? = null
             try {
                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 val rate = am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 48000
-                val framesPerBuffer = am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 240
-                val frames = max(framesPerBuffer, rate / 200)
+                val burst = am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull()?.takeIf { it > 0 } ?: 240
                 val minBuf = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT)
                 track = AudioTrack.Builder()
                     .setAudioAttributes(
@@ -210,16 +229,36 @@ class StreamService : Service() {
                             .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                             .build()
                     )
-                    .setBufferSizeInBytes(max(minBuf, frames * 2 * 4 * 2))
+                    // Room to grow into; what is actually used is set below.
+                    .setBufferSizeInBytes(max(minBuf, burst * 8 * 8))
                     .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
+                // Start with two bursts queued and add one each time the speaker runs dry.
+                var size = track.setBufferSizeInFrames(burst * 2)
+                var underruns = track.underrunCount
                 track.play()
-                val buf = FloatArray(frames * 2)
+                val buf = FloatArray(burst * 2)
+                val ts = AudioTimestamp()
+                var written = 0L
+                var n = 0
                 while (running) {
-                    Native.render(handle, buf, frames, rate, 2)
-                    val n = track.write(buf, 0, buf.size, AudioTrack.WRITE_BLOCKING)
-                    if (n < 0) throw IllegalStateException("AudioTrack write error $n")
+                    Native.render(handle, buf, burst, rate, 2)
+                    val w = track.write(buf, 0, buf.size, AudioTrack.WRITE_BLOCKING)
+                    if (w < 0) throw IllegalStateException("AudioTrack write error $w")
+                    written += w / 2
+                    if (++n % 50 == 0) {
+                        val u = track.underrunCount
+                        if (u > underruns && size > 0 && size < track.bufferCapacityInFrames) {
+                            size = track.setBufferSizeInFrames(size + burst)
+                        }
+                        underruns = u
+                        if (track.getTimestamp(ts)) {
+                            val playingNow = ts.framePosition + (System.nanoTime() - ts.nanoTime) * rate / 1_000_000_000L
+                            val ms = (written - playingNow) * 1000.0 / rate
+                            if (ms > 0 && ms < 1000) Native.setOutputLatency(handle, ms.toFloat())
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 // Output changed (headphones, Bluetooth) or failed: rebuild it.
@@ -329,11 +368,25 @@ class StreamService : Service() {
                 rec = r
                 if (r.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("AudioRecord not initialized")
                 r.startRecording()
-                val buf = FloatArray(CAPTURE_RATE / 200 * channels) // 5 ms
+                val buf = FloatArray(CAPTURE_RATE / 400 * channels) // 2.5 ms
+                val ts = AudioTimestamp()
+                var framesRead = 0L
+                var reads = 0
                 while (capturing) {
                     val n = r.read(buf, 0, buf.size, AudioRecord.READ_BLOCKING)
-                    if (n > 0) Native.pushCapture(handle, buf, n, CAPTURE_RATE, channels)
-                    else if (n < 0) throw IllegalStateException("AudioRecord read error $n")
+                    if (n > 0) {
+                        Native.pushCapture(handle, buf, n, CAPTURE_RATE, channels)
+                        framesRead += n / channels
+                        if (++reads % 200 == 0 &&
+                            r.getTimestamp(ts, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS
+                        ) {
+                            // Frame ts.framePosition was captured at ts.nanoTime; the
+                            // frame just read came (framesRead - position) frames later.
+                            val capturedAt = ts.nanoTime + (framesRead - ts.framePosition) * 1_000_000_000L / CAPTURE_RATE
+                            val ms = (System.nanoTime() - capturedAt) / 1e6
+                            if (ms > 0 && ms < 1000) Native.setCaptureLatency(handle, ms.toFloat())
+                        }
+                    } else if (n < 0) throw IllegalStateException("AudioRecord read error $n")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "capture restarting", e)
