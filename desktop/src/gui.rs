@@ -1,5 +1,6 @@
 //! Desktop window. Simple one-page layout, all text in Thai.
 
+use crate::updater::{self, Status as UpdateStatus};
 use eframe::egui::{self, Color32, RichText};
 use ssnd_core::proto::DEFAULT_AUDIO_PORT;
 use ssnd_core::{list_sources, Engine, EngineConfig, Peer, Source, SourceInfo, SourceKind};
@@ -123,6 +124,10 @@ struct App {
     peers: Vec<Peer>,
     last_peer_poll: Instant,
     message: Option<(String, Instant)>,
+    update: Arc<parking_lot::Mutex<UpdateStatus>>,
+    last_update_check: Instant,
+    /// After an update restart the old copy may still hold the port briefly.
+    receive_retry_until: Option<Instant>,
 }
 
 impl App {
@@ -143,11 +148,16 @@ impl App {
             peers: Vec::new(),
             last_peer_poll: Instant::now() - Duration::from_secs(5),
             message: None,
+            update: Arc::new(parking_lot::Mutex::new(UpdateStatus::Idle)),
+            last_update_check: Instant::now(),
+            receive_retry_until: None,
         };
         // Receiving is on by default so other devices can send here right away.
-        if let Err(e) = app.engine.start_receiving() {
-            app.flash(t(format!("เปิดรับเสียงไม่ได้: {e}")));
+        if app.engine.start_receiving().is_err() {
+            app.receive_retry_until = Some(Instant::now() + Duration::from_secs(5));
         }
+        updater::cleanup();
+        updater::check_and_download_in_background(app.update.clone());
         app
     }
 
@@ -224,6 +234,21 @@ impl eframe::App for App {
             self.last_peer_poll = Instant::now();
         }
         self.sync_engine();
+        if let Some(until) = self.receive_retry_until {
+            match self.engine.start_receiving() {
+                Ok(()) => self.receive_retry_until = None,
+                Err(e) if Instant::now() > until => {
+                    self.receive_retry_until = None;
+                    self.flash(t(format!("เปิดรับเสียงไม่ได้: {e}")));
+                }
+                Err(_) => {}
+            }
+        }
+        // Look for a new version every 6 hours while running.
+        if self.last_update_check.elapsed() > Duration::from_secs(6 * 3600) {
+            self.last_update_check = Instant::now();
+            updater::check_and_download_in_background(self.update.clone());
+        }
         ctx.request_repaint_after(Duration::from_millis(100));
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -239,16 +264,67 @@ impl eframe::App for App {
                         ui.colored_label(Color32::from_rgb(0xFF, 0x80, 0x80), m);
                     }
                 }
+                self.update_banner(ui);
                 ui.add_space(6.0);
                 self.send_card(ui);
                 self.receive_card(ui);
                 self.devices_card(ui);
+                self.version_footer(ui);
             });
         });
     }
 }
 
 impl App {
+    fn update_banner(&mut self, ui: &mut egui::Ui) {
+        let status = self.update.lock().clone();
+        let UpdateStatus::Ready { release, file } = status else { return };
+        egui::Frame::new().fill(RED_DIM).corner_radius(10.0).inner_margin(12.0).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(t(format!("มีเวอร์ชันใหม่พร้อมแล้ว (build {})", release.build))).color(Color32::WHITE).strong());
+            let busy = self.engine.sender_stats().active || !self.engine.streams().is_empty();
+            if busy {
+                ui.label(RichText::new(t("กำลังสตรีมอยู่ กดอัปเดตแล้วเสียงจะหยุดสักครู่")).color(Color32::WHITE).size(13.0));
+            }
+            if ui.button(t("รีสตาร์ตเพื่ออัปเดต")).clicked() {
+                // Release capture sinks and the port before handing over.
+                self.engine.stop_sending();
+                self.engine.stop_receiving();
+                if let Err(e) = updater::install_and_restart(&file) {
+                    *self.update.lock() = UpdateStatus::Failed(format!("{e:#}"));
+                    let _ = self.engine.start_receiving();
+                }
+            }
+        });
+        ui.add_space(6.0);
+    }
+
+    fn version_footer(&mut self, ui: &mut egui::Ui) {
+        let status = self.update.lock().clone();
+        ui.horizontal(|ui| {
+            let build = updater::current_build();
+            let ver = if build == 0 { "dev".to_string() } else { format!("build {build}") };
+            ui.label(RichText::new(t(format!("เวอร์ชัน {ver}"))).weak().size(13.0));
+            let text = match &status {
+                UpdateStatus::Idle => String::new(),
+                UpdateStatus::Checking => t("กำลังตรวจสอบอัปเดต…"),
+                UpdateStatus::UpToDate => t("เป็นเวอร์ชันล่าสุดแล้ว"),
+                UpdateStatus::Downloading { release, percent } => {
+                    t(format!("กำลังดาวน์โหลด build {} ({percent}%)", release.build))
+                }
+                UpdateStatus::Ready { .. } => t("อัปเดตพร้อมติดตั้ง"),
+                UpdateStatus::Failed(e) => t(format!("ตรวจสอบอัปเดตไม่ได้: {e}")),
+            };
+            ui.label(RichText::new(text).weak().size(13.0));
+            let idle = matches!(status, UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Failed(_));
+            if idle && ui.small_button(t("ตรวจสอบอัปเดต")).clicked() {
+                self.last_update_check = Instant::now();
+                *self.update.lock() = UpdateStatus::Idle;
+                updater::check_and_download_in_background(self.update.clone());
+            }
+        });
+    }
+
     fn destination_checks(&mut self, ui: &mut egui::Ui, forward: bool) {
         let targets = self.targets();
         if targets.is_empty() {

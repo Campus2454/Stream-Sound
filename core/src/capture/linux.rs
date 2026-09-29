@@ -5,10 +5,7 @@
 
 use super::{CaptureOptions, SampleSink, Source, SourceInfo, SourceKind};
 use anyhow::{anyhow, Context};
-use libpulse_binding::def::BufferAttr;
-use libpulse_binding::sample::{Format, Spec};
-use libpulse_binding::stream::Direction;
-use libpulse_simple_binding::Simple;
+use crate::pulse::{BufferAttr, Direction, Stream};
 use serde_json::Value;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,19 +97,13 @@ pub fn run(source: &Source, opts: &CaptureOptions, sink: SampleSink, stop: &Atom
 }
 
 fn record(device: &str, mut sink: SampleSink, stop: &AtomicBool, tick: &mut dyn FnMut()) -> anyhow::Result<()> {
-    let spec = Spec { format: Format::FLOAT32NE, channels: CH as u8, rate: RATE };
-    let frag = (CHUNK_FRAMES * CH * 4) as u32;
-    let attr = BufferAttr { maxlength: u32::MAX, tlength: u32::MAX, prebuf: u32::MAX, minreq: u32::MAX, fragsize: frag };
-    let s = Simple::new(None, "Stream Sound", Direction::Record, Some(device), "capture", &spec, None, Some(&attr))
+    let attr = BufferAttr { fragsize: (CHUNK_FRAMES * CH * 4) as u32, ..BufferAttr::default_all() };
+    let s = Stream::open(Direction::Record, Some(device), "capture", RATE, CH as u8, &attr)
         .map_err(|e| anyhow!("cannot record from {device}: {e}"))?;
-    let mut bytes = vec![0u8; CHUNK_FRAMES * CH * 4];
     let mut samples = vec![0.0f32; CHUNK_FRAMES * CH];
     tick();
     while !stop.load(Ordering::Relaxed) {
-        s.read(&mut bytes).map_err(|e| anyhow!("read from {device} failed: {e}"))?;
-        for (o, b) in samples.iter_mut().zip(bytes.chunks_exact(4)) {
-            *o = f32::from_ne_bytes([b[0], b[1], b[2], b[3]]);
-        }
+        s.read(&mut samples).map_err(|e| anyhow!("read from {device} failed: {e}"))?;
         sink(&samples, RATE, CH);
         tick();
     }

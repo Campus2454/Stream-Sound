@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +56,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 private val Red = Color(0xFFE51A2E)
@@ -177,6 +181,41 @@ private fun AppScreen(activity: MainActivity) {
     var message by remember { mutableStateOf("") }
     var pendingDests by remember { mutableStateOf("") }
 
+    // ---- self-update from GitHub Releases ----
+    val scope = rememberCoroutineScope()
+    val installedBuild = remember { Updater.currentBuild(activity) }
+    var updateRelease by remember { mutableStateOf<Updater.Release?>(null) }
+    var updateFile by remember { mutableStateOf<java.io.File?>(null) }
+    var updateText by remember { mutableStateOf("") }
+    var updateBusy by remember { mutableStateOf(false) }
+    fun runUpdateCheck() {
+        if (updateBusy) return
+        updateBusy = true
+        scope.launch {
+            updateText = "กำลังตรวจสอบอัปเดต…"
+            try {
+                val rel = withContext(Dispatchers.IO) { Updater.check(activity) }
+                if (rel == null) {
+                    updateText = "เป็นเวอร์ชันล่าสุดแล้ว"
+                } else {
+                    updateRelease = rel
+                    val file = withContext(Dispatchers.IO) {
+                        Updater.download(activity, rel) { p ->
+                            activity.runOnUiThread { updateText = "กำลังดาวน์โหลด build ${rel.build} ($p%)" }
+                        }
+                    }
+                    updateFile = file
+                    updateText = "อัปเดตพร้อมติดตั้ง"
+                }
+            } catch (e: Exception) {
+                updateText = "ตรวจสอบอัปเดตไม่ได้: ${e.message ?: e.javaClass.simpleName}"
+            } finally {
+                updateBusy = false
+            }
+        }
+    }
+    LaunchedEffect(Unit) { runUpdateCheck() }
+
     // Poll the engine a few times a second.
     LaunchedEffect(Unit) {
         var applied = false
@@ -281,6 +320,29 @@ private fun AppScreen(activity: MainActivity) {
             Text(message, color = ErrorText, modifier = Modifier.padding(top = 6.dp).clickable { message = "" })
         }
         Spacer(Modifier.height(10.dp))
+
+        val readyFile = updateFile
+        val readyRelease = updateRelease
+        if (readyFile != null && readyRelease != null) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = RedDim),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("มีเวอร์ชันใหม่พร้อมแล้ว (build ${readyRelease.build})", color = Color.White, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = {
+                            if (!Updater.install(activity, readyFile)) {
+                                message = "อนุญาต \"ติดตั้งแอปที่ไม่รู้จัก\" ให้ Stream Sound แล้วกดติดตั้งอีกครั้ง"
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = RedDim),
+                    ) { Text("ติดตั้งอัปเดต") }
+                }
+            }
+        }
 
         // ---- send ----
         Section("ส่งเสียง") {
@@ -398,6 +460,13 @@ private fun AppScreen(activity: MainActivity) {
                     }) { Text("ลบ", color = Red) }
                 }
             }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("เวอร์ชัน build $installedBuild", color = Muted, fontSize = 12.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(updateText, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            TextButton(onClick = { runUpdateCheck() }, enabled = !updateBusy) { Text("ตรวจสอบอัปเดต", color = Red) }
         }
 
         OutlinedButton(

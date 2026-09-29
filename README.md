@@ -5,13 +5,14 @@ shared by every platform; desktop UI in Thai.
 
 ## Builds
 
-Every push builds Windows, Linux and Android automatically. See
+Every push builds Windows, Linux and Android automatically, and every change
+on `main` is published as a release that installed apps update from. See
 **การติดตั้ง** below for where to download them and how to install.
 
 | Platform | Status |
 |---|---|
 | Windows 10/11 | Built and unit-tested on GitHub's Windows runner; not yet tried on a real PC |
-| Linux (PulseAudio or PipeWire) | Built and tested end to end |
+| Linux (PulseAudio or PipeWire) | Built and tested end to end; one standalone file |
 | Android 10+ | Built on GitHub; not yet tried on a real phone |
 | iOS | Not built yet (planned: cloud Mac build, sideloaded from Windows) |
 
@@ -19,17 +20,24 @@ Every push builds Windows, Linux and Android automatically. See
 
 ### ดาวน์โหลดไฟล์
 
-ทุกครั้งที่มีการแก้โค้ด GitHub จะสร้างแอปให้ใหม่อัตโนมัติ
+เปิด <https://github.com/Campus2454/Audio-Streaming/releases/latest>
+(ไม่ต้องล็อกอิน) แล้วเลื่อนลงไปที่ **Assets**:
 
-1. ล็อกอิน GitHub แล้วเปิด <https://github.com/Campus2454/Audio-Streaming/actions>
-2. กดรายการบนสุดที่มี **✓ สีเขียว**
-3. เลื่อนลงไปที่หัวข้อ **Artifacts** แล้วกดชื่อไฟล์ของเครื่องที่ต้องการ:
-   `StreamSound-windows-x64`, `StreamSound-linux-x64` หรือ `StreamSound-android`
-   (ได้เป็นไฟล์ .zip; ไฟล์ใน Artifacts จะถูกลบเองหลัง 90 วัน)
+| เครื่อง | ไฟล์ |
+|---|---|
+| Windows | `StreamSound-windows-x64.zip` |
+| Linux | `StreamSound-linux-x86_64` |
+| Android | `StreamSound.apk` |
+
+ติดตั้งครั้งแรกครั้งเดียว หลังจากนั้นแอปจะอัปเดตตัวเองจากหน้านี้ (ดู **อัปเดตอัตโนมัติ** ด้านล่าง)
+
+ไฟล์ทดสอบที่ยังไม่รวมเข้า `main` อยู่ที่ <https://github.com/Campus2454/Audio-Streaming/actions>
+(ต้องล็อกอิน): กดรายการที่มี **✓ สีเขียว** แล้วดาวน์โหลดจากหัวข้อ **Artifacts** (ได้เป็นไฟล์ .zip)
 
 ### Windows 10/11
 
-1. คลิกขวาไฟล์ zip > **Extract All** (ต้องแตกไฟล์ก่อน อย่าเปิดจากใน zip)
+1. คลิกขวาไฟล์ zip > **Extract All** ไปไว้ในโฟลเดอร์ของคุณเอง เช่น `Documents\StreamSound`
+   (ต้องแตกไฟล์ก่อน อย่าเปิดจากใน zip และอย่าไว้ใน `Program Files` ไม่อย่างนั้นแอปจะอัปเดตตัวเองไม่ได้)
 2. เปิด `StreamSound.exe`
 3. ถ้าขึ้น "Windows protected your PC" ให้กด **More info** > **Run anyway**
 4. ถ้า Windows Firewall ถาม ให้ติ๊ก **Private networks** แล้วกด **Allow**
@@ -37,39 +45,54 @@ Every push builds Windows, Linux and Android automatically. See
 
 ### Android 10 ขึ้นไป
 
-1. ดาวน์โหลด `StreamSound-android` บนมือถือ (หรือโหลดบนคอม แล้วส่งไฟล์เข้ามือถือ)
-2. แตกไฟล์ zip ด้วยแอปจัดการไฟล์ (เช่น Files by Google) จะได้ `StreamSound.apk`
-3. แตะ `StreamSound.apk` > ถ้ามือถือถาม ให้เปิด **อนุญาตจากแหล่งที่มานี้**
-   (Install unknown apps) ให้แอปจัดการไฟล์ แล้วกด **ติดตั้ง**
+1. เปิดลิงก์ release ด้านบนบนมือถือ แล้วแตะ `StreamSound.apk`
+   (หรือโหลดบนคอม แล้วส่งไฟล์เข้ามือถือ)
+2. แตะไฟล์ที่ดาวน์โหลดมา > ถ้ามือถือถาม ให้เปิด **อนุญาตจากแหล่งที่มานี้**
+   (Install unknown apps) ให้เบราว์เซอร์หรือแอปจัดการไฟล์ แล้วกด **ติดตั้ง**
    - ถ้า Play Protect เตือน ให้กด **รายละเอียดเพิ่มเติม** > **ติดตั้งต่อไป**
-4. เปิดแอป แล้วกด **อนุญาต** การแจ้งเตือน (แอปใช้แจ้งเตือนเพื่อทำงานตอนปิดจอ)
-5. ตอนกด "เริ่มส่งเสียง" ครั้งแรก:
+3. เปิดแอป แล้วกด **อนุญาต** การแจ้งเตือน (แอปใช้แจ้งเตือนเพื่อทำงานตอนปิดจอ)
+4. ตอนกด "เริ่มส่งเสียง" ครั้งแรก:
    - อนุญาต **บันทึกเสียง**
    - เมื่อ Android ถามเรื่องบันทึก/แชร์หน้าจอ ให้เลือก **ทั้งหน้าจอ** แล้วกด **เริ่ม**
      (แอปใช้แค่เสียง ไม่ได้บันทึกภาพ)
-6. แนะนำ: ตั้งค่า > แอป > Stream Sound > แบตเตอรี่ > **ไม่จำกัด (Unrestricted)**
+5. แนะนำ: ตั้งค่า > แอป > Stream Sound > แบตเตอรี่ > **ไม่จำกัด (Unrestricted)**
    เพื่อไม่ให้มือถือปิดแอปเองตอนสตรีมนาน ๆ
 
-อัปเดตเวอร์ชันใหม่: ติดตั้งทับได้เลย ไม่ต้องลบของเก่า
 แอปบางตัว (เช่นแอปดูหนังบางแอป) ไม่ยอมให้จับเสียง จะส่งออกไปเป็นเสียงเงียบ
 
-### Linux
+### Linux (Arch Linux)
 
-ต้องใช้ระบบที่มี PulseAudio หรือ PipeWire (Ubuntu 22.04+, Debian 12+, Fedora,
-Linux Mint 21+ ฯลฯ ใช้ได้เลย)
+`StreamSound-linux-x86_64` เป็นไฟล์เดียวจบ ไม่ต้องติดตั้งแพ็กเกจเพิ่ม ใช้แค่ glibc
+และเซิร์ฟเวอร์เสียงที่เดสก์ท็อปมีอยู่แล้ว (PulseAudio หรือ PipeWire)
+ใช้ได้กับ Arch และดิสโทรอื่นที่ใหม่กว่า Ubuntu 22.04
 
-1. แตกไฟล์ zip จะได้ไฟล์ `stream-sound`
-2. เปิด Terminal ในโฟลเดอร์นั้นแล้วพิมพ์:
+1. ติดตั้งไว้ในโฟลเดอร์ของคุณเอง แล้วเปิด:
    ```
-   chmod +x stream-sound
-   ./stream-sound
+   install -Dm755 ~/Downloads/StreamSound-linux-x86_64 ~/.local/bin/stream-sound
+   ~/.local/bin/stream-sound
    ```
-3. ถ้าต้องการส่งเสียงเฉพาะแอป ต้องมีคำสั่ง `pactl`
-   (Ubuntu/Debian: `sudo apt install pulseaudio-utils`)
-4. ถ้าเปิดไฟร์วอลล์ไว้ ให้เปิดพอร์ต:
-   `sudo ufw allow 47800:47801/udp`
-5. (ไม่บังคับ) ติดตั้งให้เรียกจากที่ไหนก็ได้:
-   `install -Dm755 stream-sound ~/.local/bin/stream-sound`
+   (ไว้ที่ไหนก็ได้ที่คุณเขียนไฟล์ได้ เพื่อให้แอปอัปเดตตัวเองได้ อย่าไว้ใน `/usr/bin`)
+2. ถ้าขึ้นว่า "ไม่พบ PulseAudio/PipeWire (libpulse)": เครื่องที่ใช้ PipeWire ต้องมี
+   `pipewire-pulse` ด้วย: `sudo pacman -S --needed libpulse pipewire-pulse`
+   (ตรวจได้ด้วย `pactl info` ถ้าขึ้น `Server Name` แสดงว่าใช้ได้)
+3. การส่งเสียงเฉพาะแอปใช้คำสั่ง `pactl` ซึ่งมากับแพ็กเกจ `libpulse` บน Arch อยู่แล้ว
+4. ถ้าเปิดไฟร์วอลล์ไว้ ให้เปิดพอร์ต UDP 47800–47801
+   (ufw: `sudo ufw allow 47800:47801/udp`,
+   firewalld: `sudo firewall-cmd --permanent --add-port=47800-47801/udp && sudo firewall-cmd --reload`)
+
+### อัปเดตอัตโนมัติ
+
+ทุกครั้งที่มีการแก้โค้ดเข้า `main` GitHub จะสร้าง release ใหม่ (build ใหม่) ให้เอง
+
+- **Windows / Linux:** แอปเช็กตอนเปิดและทุก 6 ชั่วโมง ถ้ามีเวอร์ชันใหม่จะดาวน์โหลดเก็บไว้เงียบ ๆ
+  แล้วขึ้นแถบสีแดง "มีเวอร์ชันใหม่พร้อมแล้ว" กด **รีสตาร์ตเพื่ออัปเดต** เมื่อสะดวก
+  (แอปไม่รีสตาร์ตเองกลางการสตรีม) ด้านล่างสุดมีเลข build ปัจจุบันและปุ่ม **ตรวจสอบอัปเดต**
+- **Android:** แอปเช็กและดาวน์โหลดตอนเปิด แล้วขึ้นการ์ด **ติดตั้งอัปเดต**
+  ครั้งแรก Android จะพาไปหน้า "ติดตั้งแอปที่ไม่รู้จัก" ให้เปิดอนุญาตให้ Stream Sound
+  แล้วกลับมากดอีกครั้ง Android จะถามยืนยันการติดตั้งทุกครั้ง (ข้ามไม่ได้)
+- **iPhone:** แอปที่ sideload อัปเดตตัวเองไม่ได้ (ข้อจำกัดของ Apple)
+  เมื่อมีแอป iOS จะทำ source สำหรับ SideStore ให้ดึงเวอร์ชันใหม่จาก GitHub
+- **Command line:** `stream-sound update`
 
 ### iPhone / iPad (ยังไม่พร้อม)
 
@@ -108,6 +131,7 @@ stream-sound recv  [--port 47800] [--latency 20] [--forward IP[:PORT],..] [--no-
 stream-sound send  --to IP[:PORT],.. [--source system|tone|app:NAME|input:NAME]
 stream-sound sources     # list capturable sources
 stream-sound peers       # list devices on the LAN
+stream-sound update      # download and install the newest release
 ```
 
 ## How it works
@@ -133,7 +157,11 @@ stream-sound peers       # list devices on the LAN
   - Windows: WASAPI loopback (whole system), process loopback (one app, needs
     Windows 10 2004+), any input device.
   - Linux: PulseAudio/PipeWire monitor (whole system); per-app by moving the
-    app's streams to a private sink, which is removed on stop.
+    app's streams to a private sink, which is removed on stop. libpulse is
+    loaded at run time, so the binary links nothing but glibc.
+- **Updates:** CI tags each release `v0.1.<run number>` and bakes the same
+  number into the apps (`SSND_BUILD`, Android `versionCode`). The apps read
+  `releases/latest` from the GitHub API and download the matching asset.
 
 ## Tested here (Linux, 2026-09-29)
 
@@ -147,7 +175,7 @@ stream-sound peers       # list devices on the LAN
 ## Build from source
 
 ```
-cargo build --release                                   # Linux (needs libpulse-dev, libasound2-dev)
+cargo build --release                                   # Linux (needs libxkbcommon-dev, libwayland-dev)
 cargo build --release --target x86_64-pc-windows-gnu    # Windows (needs mingw-w64)
 cargo test -p ssnd-core
 ```

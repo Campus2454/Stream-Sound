@@ -5,6 +5,8 @@ pub mod discovery;
 pub mod engine;
 pub mod jitter;
 pub mod proto;
+#[cfg(target_os = "linux")]
+mod pulse;
 
 pub use capture::{list_sources, Source, SourceInfo, SourceKind};
 pub use discovery::Peer;

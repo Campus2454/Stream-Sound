@@ -4,6 +4,7 @@
 //!   stream-sound send  --to IP[:PORT],.. [--source system|tone|app:NAME|input:NAME] [--seconds N]
 //!   stream-sound sources
 //!   stream-sound peers
+//!   stream-sound update     # install the latest GitHub release over this file
 
 use ssnd_core::proto::DEFAULT_AUDIO_PORT;
 use ssnd_core::{list_sources, Engine, EngineConfig, Source};
@@ -49,6 +50,19 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
         cfg.name = n;
     }
     match cmd {
+        "update" => {
+            println!("this is build {}", crate::updater::current_build());
+            match crate::updater::check()? {
+                None => println!("already up to date"),
+                Some(rel) => {
+                    println!("downloading {} ...", rel.tag);
+                    let file = crate::updater::download(&rel, |_| {})?;
+                    let exe = crate::updater::install(&file)?;
+                    println!("updated {} to build {}", exe.display(), rel.build);
+                }
+            }
+            Ok(())
+        }
         "sources" => {
             for s in list_sources() {
                 println!("{:?}\t{}", s.source, s.label);
@@ -111,7 +125,7 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
             }
         }
         _ => {
-            eprintln!("usage: stream-sound [recv|send|sources|peers] (no arguments opens the app)");
+            eprintln!("usage: stream-sound [recv|send|sources|peers|update] (no arguments opens the app)");
             Ok(())
         }
     }

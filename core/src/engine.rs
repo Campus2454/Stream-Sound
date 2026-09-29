@@ -391,34 +391,20 @@ fn net_loop(
 fn run_output(mixer: &Arc<Mutex<Mixer>>, stop: &AtomicBool) -> anyhow::Result<()> {
     // On Linux talk to PulseAudio/PipeWire directly: it paces us precisely and
     // avoids the ALSA compatibility layer, which can glitch at small buffers.
-    use libpulse_binding::def::BufferAttr;
-    use libpulse_binding::sample::{Format, Spec};
-    use libpulse_binding::stream::Direction;
-    use libpulse_simple_binding::Simple;
+    use crate::pulse::{BufferAttr, Direction, Stream};
     const RATE: u32 = 48_000;
     const CH: usize = 2;
     const CHUNK: usize = 240; // 5 ms
-    let spec = Spec { format: Format::FLOAT32NE, channels: CH as u8, rate: RATE };
-    let bytes_per_ms = RATE as u32 * CH as u32 * 4 / 1000;
-    let attr = BufferAttr {
-        maxlength: u32::MAX,
-        tlength: bytes_per_ms * 15,
-        prebuf: u32::MAX,
-        minreq: bytes_per_ms * 5,
-        fragsize: u32::MAX,
-    };
-    let s = Simple::new(None, "Stream Sound", Direction::Playback, None, "playback", &spec, None, Some(&attr))
+    let bytes_per_ms = RATE * CH as u32 * 4 / 1000;
+    let attr = BufferAttr { tlength: bytes_per_ms * 15, minreq: bytes_per_ms * 5, ..BufferAttr::default_all() };
+    let s = Stream::open(Direction::Playback, None, "playback", RATE, CH as u8, &attr)
         .map_err(|e| anyhow::anyhow!("cannot open speakers: {e}"))?;
     OUTPUT_RATE.store(RATE as u64, Ordering::Relaxed);
     OUTPUT_BLOCK_FRAMES.store(CHUNK as u64, Ordering::Relaxed);
     let mut samples = vec![0.0f32; CHUNK * CH];
-    let mut bytes = vec![0u8; CHUNK * CH * 4];
     while !stop.load(Ordering::Relaxed) {
         mixer.lock().render(&mut samples, RATE, CH);
-        for (b, v) in bytes.chunks_exact_mut(4).zip(samples.iter()) {
-            b.copy_from_slice(&v.to_ne_bytes());
-        }
-        s.write(&bytes).map_err(|e| anyhow::anyhow!("speaker write failed: {e}"))?;
+        s.write(&samples).map_err(|e| anyhow::anyhow!("speaker write failed: {e}"))?;
     }
     Ok(())
 }

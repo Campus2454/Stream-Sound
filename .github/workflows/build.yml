@@ -6,24 +6,37 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  # Baked into every app as its build number; the updaters compare it with
+  # the newest release tag (v0.1.<build>).
+  SSND_BUILD: ${{ github.run_number }}
+
 jobs:
   linux:
     # Oldest supported image, so the binary runs on Ubuntu 22.04 / Debian 12 and newer.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install audio and window libraries
+      # Sound (libpulse) and window libraries are loaded at run time, so the
+      # binary itself only links glibc.
+      - name: Install window libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev libwayland-dev
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked -p ssnd-core
+      - run: cargo test --locked -p ssnd-core -p stream-sound
       - run: cargo build --locked --release
+      - name: Package
+        run: |
+          mkdir -p out
+          cp target/release/stream-sound out/StreamSound-linux-x86_64
+          echo "Linked libraries:"
+          readelf -d out/StreamSound-linux-x86_64 | grep NEEDED
       - uses: actions/upload-artifact@v4
         with:
           name: StreamSound-linux-x64
-          path: target/release/stream-sound
+          path: out/StreamSound-linux-x86_64
 
   windows:
     runs-on: windows-latest
@@ -31,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked -p ssnd-core
+      - run: cargo test --locked -p ssnd-core -p stream-sound
       - run: cargo build --locked --release
       - name: Package
         shell: pwsh
@@ -78,3 +91,39 @@ jobs:
         with:
           name: StreamSound-android
           path: out/StreamSound.apk
+
+  # Every change on main becomes a GitHub release; the apps update from it.
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [linux, windows, android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect release files
+        run: |
+          mkdir -p release
+          cp artifacts/StreamSound-linux-x64/StreamSound-linux-x86_64 release/
+          cp artifacts/StreamSound-windows-x64/StreamSound.exe release/StreamSound-windows-x64.exe
+          (cd artifacts/StreamSound-windows-x64 && zip -9 ../../release/StreamSound-windows-x64.zip StreamSound.exe)
+          cp artifacts/StreamSound-android/StreamSound.apk release/
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Stream Sound build ${{ github.run_number }}
+          make_latest: true
+          body: |
+            Windows: StreamSound-windows-x64.zip (or the .exe)
+            Linux: StreamSound-linux-x86_64 (chmod +x, then run)
+            Android: StreamSound.apk
+
+            Apps that are already installed update themselves from here.
+          files: release/*
