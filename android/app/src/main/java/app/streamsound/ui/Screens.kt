@@ -696,7 +696,7 @@ private fun SettingsTab(m: UiModel, host: Host) {
             host.checkUpdate()
         }
         Gap(4.dp)
-        Hint("แอปตรวจหาเวอร์ชันใหม่จาก GitHub ให้เองทุกครั้งที่เปิด", C.Text3)
+        Hint("แอปตรวจหาเวอร์ชันใหม่จาก GitHub ให้เองตอนเปิดและทุก 5 นาที", C.Text3)
     }
 
     Box(

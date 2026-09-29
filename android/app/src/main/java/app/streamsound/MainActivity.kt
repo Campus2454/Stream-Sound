@@ -129,7 +129,13 @@ class MainActivity : ComponentActivity(), Host {
         ensureService()
         setContent { AppUi(model, this@MainActivity) }
         scope.launch { pollEngine() }
-        checkUpdate()
+        // Look for a new version now and every 5 minutes while the app runs.
+        scope.launch {
+            while (true) {
+                checkUpdate()
+                delay(5 * 60_000L)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -313,6 +319,8 @@ class MainActivity : ComponentActivity(), Host {
                         )
                     }
                 }
+            } catch (e: Updater.NotUploadedYet) {
+                model.update = model.update.copy(text = "")
             } catch (e: Exception) {
                 val msg = e.message ?: e.javaClass.simpleName
                 val offline = msg.contains("Unable to resolve", true) || msg.contains("timeout", true) || msg.contains("failed to connect", true)

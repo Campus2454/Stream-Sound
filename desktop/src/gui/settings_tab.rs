@@ -311,7 +311,7 @@ fn update_card(app: &mut App, ui: &mut Ui) {
             &mut app.s.beta,
         )
         .changed();
-        hint(ui, "แอปตรวจหาเวอร์ชันใหม่จาก GitHub ให้เองทุก 6 ชั่วโมง");
+        hint(ui, "แอปตรวจหาเวอร์ชันใหม่จาก GitHub ให้เองตอนเปิดและทุก 5 นาที");
     });
     if beta_changed {
         app.save();

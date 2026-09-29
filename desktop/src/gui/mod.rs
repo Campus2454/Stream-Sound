@@ -19,6 +19,9 @@ use std::time::{Duration, Instant};
 use theme::*;
 use widgets::*;
 
+/// How often a running app looks for a new version.
+const UPDATE_EVERY: Duration = Duration::from_secs(5 * 60);
+
 pub fn run() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -188,8 +191,8 @@ impl App {
                 Err(_) => {}
             }
         }
-        // Look for a new version every 6 hours while running.
-        if self.last_update_check.elapsed() > Duration::from_secs(6 * 3600) {
+        // Look for a new version every 5 minutes while running (and at start).
+        if self.last_update_check.elapsed() > UPDATE_EVERY {
             self.last_update_check = Instant::now();
             updater::check_and_download_in_background(self.update.clone(), self.s.beta);
         }
