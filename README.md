@@ -92,10 +92,10 @@ on `main` is published as a release that installed apps update from. See
 - แอปรับเวอร์ชันเบต้าด้วยเป็นค่าเริ่มต้น ปิดได้ที่หน้า **ตั้งค่า** > **รับเวอร์ชันเบต้าด้วย**
   (ปิดแล้วจะอัปเดตเฉพาะเวอร์ชันทางการ)
 
-- **Windows / Linux:** แอปเช็กตอนเปิดและทุก 6 ชั่วโมง ถ้ามีเวอร์ชันใหม่จะดาวน์โหลดเก็บไว้เงียบ ๆ
+- **Windows / Linux:** แอปเช็กตอนเปิดและทุก 5 นาทีขณะเปิดแอปอยู่ ถ้ามีเวอร์ชันใหม่จะดาวน์โหลดเก็บไว้เงียบ ๆ
   แล้วขึ้นแถบสีแดง "มีเวอร์ชันใหม่" กด **อัปเดตเลย** เมื่อสะดวก (แอปไม่รีสตาร์ตเองกลางการสตรีม)
   เลขเวอร์ชันปัจจุบันและปุ่ม **ตรวจสอบอัปเดต** อยู่ที่หน้า **ตั้งค่า**
-- **Android:** แอปเช็กและดาวน์โหลดตอนเปิด แล้วขึ้นแถบ **อัปเดตเลย**
+- **Android:** แอปเช็กและดาวน์โหลดตอนเปิดและทุก 5 นาทีขณะเปิดแอปอยู่ แล้วขึ้นแถบ **อัปเดตเลย**
   ครั้งแรก Android จะพาไปหน้า "ติดตั้งแอปที่ไม่รู้จัก" ให้เปิดอนุญาตให้ Stream Sound
   แล้วกลับมากดอีกครั้ง Android จะถามยืนยันการติดตั้งทุกครั้ง (ข้ามไม่ได้)
 - **iPhone:** แอปที่ sideload อัปเดตตัวเองไม่ได้ (ข้อจำกัดของ Apple)
@@ -224,10 +224,13 @@ stream-sound update      # download and install the newest release
   (beta, every push to main; Z counts the changes since vX.Y), worked out by
   `.github/version.sh`. Betas are GitHub pre-releases once an official release
   exists. CI bakes the version into the apps (`SSND_VERSION`, Android
-  `versionName`, and `versionCode` = X·10⁷ + Y·10⁵ + Z). With betas on, the apps
-  list the newest releases from the GitHub API; with betas off they read
-  `releases/latest`. Either way they take the newest version that has their
-  file.
+  `versionName`, and `versionCode` = X·10⁷ + Y·10⁵ + Z). The apps check at
+  launch and every 5 minutes while running, through github.com pages rather
+  than the REST API (which allows 60 anonymous requests an hour per IP): with
+  betas on they read the tags in `releases.atom` (the latest 10 releases), with
+  betas off the tag `releases/latest` redirects to. They then download
+  `releases/download/<tag>/<file>`; a 404 there means the release's files are
+  still uploading, and the next check tries again.
 
 ## Tested here (Linux, 2026-09-29)
 

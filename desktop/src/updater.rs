@@ -104,18 +104,12 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// Betas are GitHub pre-releases, which /releases/latest leaves out, so with
-/// betas on the newest few releases are listed instead.
-fn releases_url(beta: bool) -> String {
-    // Overridable so the updater can be tested against a local server.
-    if let Ok(u) = std::env::var("SSND_UPDATE_URL") {
-        return u;
-    }
-    if beta {
-        format!("https://api.github.com/repos/{REPO}/releases?per_page=20")
-    } else {
-        format!("https://api.github.com/repos/{REPO}/releases/latest")
-    }
+/// The repo's web address. Updates are found through github.com pages, not
+/// the REST API, because the API allows only 60 anonymous requests an hour
+/// per home connection, which a few devices checking every 5 minutes would
+/// use up. Overridable so the updater can be tested against a local server.
+fn base_url() -> String {
+    std::env::var("SSND_UPDATE_URL").unwrap_or_else(|_| format!("https://github.com/{REPO}"))
 }
 
 pub enum Check {
@@ -124,48 +118,75 @@ pub enum Check {
     Newer(Release),
 }
 
-/// The newest release in `releases` (one release object or a list) that has
-/// this platform's file; betas only if `beta`.
-fn pick(releases: &serde_json::Value, beta: bool) -> Option<Release> {
-    let list = match releases {
-        serde_json::Value::Array(a) => a.iter().collect::<Vec<_>>(),
-        one => vec![one],
-    };
-    list.into_iter()
-        .filter(|r| !r["draft"].as_bool().unwrap_or(false))
-        .filter_map(|r| {
-            let tag = r["tag_name"].as_str()?;
-            let version = Version::parse(tag)?;
-            if version.is_beta() && !beta {
-                return None;
-            }
-            let url = r["assets"]
-                .as_array()?
-                .iter()
-                .find(|a| a["name"].as_str() == Some(ASSET))?["browser_download_url"]
-                .as_str()?;
-            Some(Release { version, tag: tag.to_string(), url: url.to_string() })
-        })
-        .max_by_key(|r| r.version)
+/// Release tags linked from `text` ("…/releases/tag/v0.2.1…").
+fn tags_in(text: &str) -> Vec<&str> {
+    const MARK: &str = "/releases/tag/";
+    let mut tags = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(MARK) {
+        rest = &rest[i + MARK.len()..];
+        let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '.')).unwrap_or(rest.len());
+        tags.push(&rest[..end]);
+    }
+    tags
+}
+
+/// The newest version among `tags`; betas only if `beta`.
+fn newest(tags: &[&str], beta: bool) -> Option<Version> {
+    tags.iter().filter_map(|t| Version::parse(t)).filter(|v| beta || !v.is_beta()).max()
+}
+
+/// Tags of the newest releases. With betas on, from the releases feed (the
+/// latest 10, pre-releases included). Otherwise from where /releases/latest
+/// redirects to, which is the newest official release.
+fn release_tags(beta: bool) -> anyhow::Result<Option<String>> {
+    let base = base_url();
+    if beta {
+        return match agent().get(&format!("{base}/releases.atom")).call() {
+            Ok(r) => Ok(Some(r.into_string()?)),
+            Err(ureq::Error::Status(404, _)) => Ok(None),
+            Err(e) => Err(e.into()),
+        };
+    }
+    let no_redirects = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30))
+        .user_agent("StreamSound-updater")
+        .redirects(0)
+        .build();
+    match no_redirects.get(&format!("{base}/releases/latest")).call() {
+        Ok(r) => Ok(r.header("Location").map(str::to_string)),
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Compare the newest release (official only unless `beta`) with this copy.
 pub fn check(beta: bool) -> anyhow::Result<Check> {
-    let resp = match agent().get(&releases_url(beta)).set("Accept", "application/vnd.github+json").call() {
-        Ok(r) => r,
-        // No release yet (or the repo is private or missing).
-        Err(ureq::Error::Status(404, _)) => return Ok(Check::NoRelease),
-        Err(e) => return Err(e.into()),
-    };
-    let v: serde_json::Value = serde_json::from_reader(resp.into_reader())?;
-    let Some(release) = pick(&v, beta) else {
+    let text = release_tags(beta)?.unwrap_or_default();
+    let Some(version) = newest(&tags_in(&text), beta) else {
         return Ok(Check::NoRelease);
     };
-    if current().is_some_and(|c| release.version <= c) {
+    if current().is_some_and(|c| version <= c) {
         return Ok(Check::UpToDate);
     }
-    Ok(Check::Newer(release))
+    let tag = format!("v{version}");
+    let url = format!("{}/releases/download/{tag}/{ASSET}", base_url());
+    Ok(Check::Newer(Release { version, tag, url }))
 }
+
+/// A release whose files are still being uploaded; it is picked up on the
+/// next check.
+#[derive(Debug)]
+pub struct NotUploadedYet;
+
+impl fmt::Display for NotUploadedYet {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("the new version's files are still being uploaded")
+    }
+}
+
+impl std::error::Error for NotUploadedYet {}
 
 fn exe_path() -> anyhow::Result<PathBuf> {
     let p = std::env::current_exe()?;
@@ -177,7 +198,11 @@ pub fn download(release: &Release, progress: impl Fn(u32)) -> anyhow::Result<Pat
     let exe = exe_path()?;
     let dir = exe.parent().ok_or_else(|| anyhow!("no folder for {}", exe.display()))?;
     let tmp = dir.join(format!("{}.update", exe.file_name().and_then(|n| n.to_str()).unwrap_or("stream-sound")));
-    let resp = agent().get(&release.url).call()?;
+    let resp = match agent().get(&release.url).call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(404, _)) => return Err(NotUploadedYet.into()),
+        Err(e) => return Err(e.into()),
+    };
     let total: u64 = resp.header("Content-Length").and_then(|s| s.parse().ok()).unwrap_or(0);
     let mut file = fs::File::create(&tmp).with_context(|| format!("cannot write to {}", dir.display()))?;
     let mut reader = resp.into_reader();
@@ -277,6 +302,7 @@ pub fn check_and_download_in_background(status: Arc<parking_lot::Mutex<Status>>,
         }));
         *status.lock() = match result {
             Ok(Ok(s)) => s,
+            Ok(Err(e)) if e.is::<NotUploadedYet>() => Status::Idle,
             Ok(Err(e)) => Status::Failed(format!("{e:#}")),
             Err(_) => Status::Failed("update check crashed".into()),
         };
@@ -286,7 +312,6 @@ pub fn check_and_download_in_background(status: Arc<parking_lot::Mutex<Status>>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn v(s: &str) -> Version {
         Version::parse(s).unwrap()
@@ -311,30 +336,35 @@ mod tests {
         }
     }
 
-    fn release(tag: &str, prerelease: bool, with_file: bool) -> serde_json::Value {
-        let assets = if with_file {
-            json!([{"name": "other"}, {"name": ASSET, "browser_download_url": format!("https://x/{tag}")}])
-        } else {
-            json!([])
-        };
-        json!({"tag_name": tag, "draft": false, "prerelease": prerelease, "assets": assets})
-    }
-
     #[test]
-    fn picks_newest_allowed_release() {
-        let list = json!([
-            release("v0.2.2", true, false), // still uploading its files
-            release("v0.2.1", true, true),
-            release("v0.2", false, true),
-            release("v0.1.14", false, true),
-            release("v0.1.x", false, true),
-        ]);
-        assert_eq!(pick(&list, true).unwrap().tag, "v0.2.1");
-        assert_eq!(pick(&list, false).unwrap().tag, "v0.2");
-        assert_eq!(pick(&list, true).unwrap().url, "https://x/v0.2.1");
-        // /releases/latest answers with one release, not a list.
-        assert_eq!(pick(&release("v0.3", false, true), false).unwrap().tag, "v0.3");
-        assert!(pick(&release("v0.1.17", false, true), false).is_none());
-        assert!(pick(&json!([]), true).is_none());
+    fn finds_newest_allowed_version() {
+        // Trimmed from github.com/<repo>/releases.atom.
+        let feed = r#"<feed xmlns="http://www.w3.org/2005/Atom">
+  <link type="text/html" rel="alternate" href="https://github.com/o/r/releases"/>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/v0.2.1</id>
+    <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/v0.2.1"/>
+    <title>Stream Sound v0.2.1 (Beta)</title>
+    <content type="html">&lt;a href=&quot;https://github.com/o/r/compare/v0.2...v0.2.1&quot;&gt;</content>
+  </entry>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/v0.2"/>
+  </entry>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/v0.1.21"/>
+  </entry>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/nightly"/>
+  </entry>
+</feed>"#;
+        let tags = tags_in(feed);
+        assert_eq!(tags, ["v0.2.1", "v0.2", "v0.1.21", "nightly"]);
+        assert_eq!(newest(&tags, true), Some(v("0.2.1")));
+        assert_eq!(newest(&tags, false), Some(v("0.2")));
+        // Where /releases/latest redirects to.
+        let tags = tags_in("https://github.com/o/r/releases/tag/v0.1.21");
+        assert_eq!(newest(&tags, true), Some(v("0.1.21")));
+        assert_eq!(newest(&tags, false), None);
+        assert_eq!(newest(&tags_in(""), true), None);
     }
 }

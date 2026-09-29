@@ -2496,7 +2496,6 @@ dependencies = [
  "anyhow",
  "eframe",
  "parking_lot",
- "serde_json",
  "ssnd-core",
  "ureq",
 ]
