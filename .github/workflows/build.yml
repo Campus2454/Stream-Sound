@@ -57,9 +57,12 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
       - name: Build the engine for Android
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
-        run: cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 --platform 29 -o android/app/src/main/jniLibs build --locked --release -p ssnd-android
+        # The runner image exports ANDROID_NDK_LATEST_HOME as a shell variable;
+        # it is not visible to the `env` expression context.
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          echo "Using NDK at $ANDROID_NDK_HOME"
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 --platform 29 -o android/app/src/main/jniLibs build --locked --release -p ssnd-android
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"

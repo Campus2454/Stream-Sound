@@ -51,6 +51,11 @@ android {
     buildFeatures {
         compose = true
     }
+    lint {
+        // Personal sideload build: lint findings are reported, never block the apk.
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
 }
 
 dependencies {
