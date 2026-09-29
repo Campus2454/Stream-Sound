@@ -44,7 +44,11 @@ jobs:
           bash .github/version.sh "$KIND" "$WANTED" | tee -a "$GITHUB_OUTPUT"
       # For workflows that run after this one (the iPhone build).
       - name: Save the version
-        run: printf 'SSND_VERSION=%s\nSSND_TAG=%s\n' "${{ steps.v.outputs.version }}" "${{ steps.v.outputs.tag }}" > version.env
+        run: |
+          printf 'SSND_VERSION=%s\nSSND_TAG=%s\nSSND_CHANNEL=%s\nSSND_PRERELEASE=%s\n' \
+            "${{ steps.v.outputs.version }}" "${{ steps.v.outputs.tag }}" \
+            "${{ steps.v.outputs.channel }}" "${{ steps.v.outputs.prerelease }}" > version.env
+          cat version.env
       - uses: actions/upload-artifact@v4
         with:
           name: version
