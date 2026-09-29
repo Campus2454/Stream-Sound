@@ -1,5 +1,6 @@
-//! LAN discovery: every device broadcasts a small hello once a second and
-//! keeps a list of the devices it hears from.
+//! LAN discovery: every device broadcasts a small hello once a second, also
+//! sends it straight to each device it already knows, and keeps a list of the
+//! devices it hears from.
 
 use crate::proto::DISCOVERY_PORT;
 use parking_lot::Mutex;
@@ -108,6 +109,17 @@ fn broadcast_targets() -> Vec<SocketAddr> {
     v
 }
 
+fn unicast_targets(peers: &HashMap<String, Peer>, self_id: &str) -> Vec<SocketAddr> {
+    let mut v: Vec<SocketAddr> = peers
+        .values()
+        .filter(|p| p.id != self_id && !p.ip.is_loopback())
+        .map(|p| SocketAddr::new(p.ip, DISCOVERY_PORT))
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
 impl Discovery {
     pub fn start(me: Announce) -> anyhow::Result<Discovery> {
         let peers: Arc<Mutex<HashMap<String, Peer>>> = Arc::default();
@@ -118,6 +130,7 @@ impl Discovery {
 
         {
             let stop = stop.clone();
+            let peers = peers.clone();
             thread::Builder::new().name("ssnd-announce".into()).spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     let msg = format!(
@@ -128,6 +141,11 @@ impl Discovery {
                         me.receiving.load(Ordering::Relaxed) as u8
                     );
                     for t in broadcast_targets() {
+                        let _ = tx.send_to(msg.as_bytes(), t);
+                    }
+                    // Also greet every known device directly: iPhones can't
+                    // hear broadcasts without a special Apple entitlement.
+                    for t in unicast_targets(&peers.lock(), &me.id) {
                         let _ = tx.send_to(msg.as_bytes(), t);
                     }
                     thread::sleep(Duration::from_millis(1000));
@@ -194,4 +212,23 @@ fn parse_hello(buf: &[u8], ip: IpAddr) -> Option<Peer> {
         ip,
         last_seen: Instant::now(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(id: &str, ip: [u8; 4]) -> (String, Peer) {
+        let p = parse_hello(format!("SSND1|{id}|n|47800|1").as_bytes(), IpAddr::V4(Ipv4Addr::from(ip))).unwrap();
+        (id.to_string(), p)
+    }
+
+    #[test]
+    fn unicast_skips_self_and_loopback() {
+        let map: HashMap<String, Peer> =
+            [peer("me", [192, 168, 1, 2]), peer("a", [127, 0, 0, 1]), peer("b", [192, 168, 1, 9]), peer("c", [192, 168, 1, 9])]
+                .into_iter()
+                .collect();
+        assert_eq!(unicast_targets(&map, "me"), vec!["192.168.1.9:47801".parse::<SocketAddr>().unwrap()]);
+    }
 }
