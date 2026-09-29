@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["core", "desktop", "android/rust"]
+# Plain `cargo build` skips the Android bridge; it is built with cargo-ndk.
+default-members = ["core", "desktop"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

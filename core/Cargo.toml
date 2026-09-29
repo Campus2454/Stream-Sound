@@ -1,0 +1,27 @@
+[package]
+name = "ssnd-core"
+version = "0.1.0"
+edition = "2021"
+description = "Stream Sound audio engine: LAN streaming, jitter buffer, mixing, relay"
+
+[dependencies]
+anyhow = "1"
+parking_lot = "0.12"
+socket2 = { version = "0.5", features = ["all"] }
+if-addrs = "0.13"
+gethostname = "0.5"
+
+# Linux talks to PulseAudio/PipeWire directly (see pulse.rs); Android audio is in Kotlin.
+[target.'cfg(not(any(target_os = "linux", target_os = "android")))'.dependencies]
+cpal = "0.15"
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.24"
+windows = { version = "0.62", features = ["Win32_System_Threading"] }
