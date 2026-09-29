@@ -73,7 +73,9 @@ the bottom for ~3 s.
 4. "ทั่วไป": visualizer style แท่งความถี่ (bars) / คลื่นเสียง (waveform) as a
    segmented control, then switches: "เปิดรับเสียงทันทีเมื่อเปิดแอป" (all) and
    "ให้จอเปิดค้างระหว่างสตรีม" (phones).
-5. "อัปเดต": build number, status line, "ตรวจสอบอัปเดต".
+5. "อัปเดต": version ("0.2", or "0.2.3 (เบต้า)" for a beta), status line,
+   "ตรวจสอบอัปเดต", then the switch "รับเวอร์ชันเบต้าด้วย" (on by default).
+   The update banner says "มีเวอร์ชันใหม่ v0.3" or "มีเวอร์ชันเบต้าใหม่ v0.3.1".
 6. Phone only: "ปิดแอปและหยุดทั้งหมด" (outlined, error-coloured text).
 
 Everything the user picks (targets, source, volume, mode, style, typed IPs,

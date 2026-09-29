@@ -47,11 +47,13 @@ data class EngineState(
 data class AppInfo(val label: String, val pkg: String, val uid: Int)
 
 data class UpdateInfo(
-    val build: Long = 0,
+    /** This install's version as shown, e.g. "0.2" or "0.2.3 (เบต้า)". */
+    val version: String = "",
     val text: String = "",
     val busy: Boolean = false,
-    /** Build number of a downloaded update waiting to be installed. */
-    val readyBuild: Long? = null,
+    /** Version of a downloaded update waiting to be installed, e.g. "0.2.3". */
+    val ready: String? = null,
+    val readyBeta: Boolean = false,
 )
 
 data class Toast(val text: String, val error: Boolean, val at: Long)
@@ -120,6 +122,8 @@ class UiModel(private val store: Store) {
     var visual by mutableStateOf(if (store.string("visual", "bars") == "wave") VizStyle.Wave else VizStyle.Bars)
     var keepScreenOn by mutableStateOf(store.bool("keepScreenOn", true))
     var autoReceive by mutableStateOf(store.bool("autoReceive", true))
+    /** Also update to beta versions (vX.Y.Z), not only official ones. */
+    var betaUpdates by mutableStateOf(store.bool("betaUpdates", true))
     var nameInput by mutableStateOf(store.string("name", ""))
 
     var relayOpen by mutableStateOf(false)
@@ -145,6 +149,7 @@ class UiModel(private val store: Store) {
                 "visual" to if (visual == VizStyle.Wave) "wave" else "bars",
                 "keepScreenOn" to keepScreenOn,
                 "autoReceive" to autoReceive,
+                "betaUpdates" to betaUpdates,
             )
         )
     }

@@ -29,6 +29,8 @@ pub struct Settings {
     pub play_local: bool,
     pub auto_receive: bool,
     pub visual: Visual,
+    /// Also update to beta versions (vX.Y.Z), not only official ones.
+    pub beta: bool,
 }
 
 impl Default for Settings {
@@ -46,6 +48,7 @@ impl Default for Settings {
             play_local: true,
             auto_receive: true,
             visual: Visual::Bars,
+            beta: true,
         }
     }
 }
@@ -101,6 +104,7 @@ pub fn parse(text: &str) -> Settings {
             "play_local" => s.play_local = flag(v),
             "auto_receive" => s.auto_receive = flag(v),
             "visual" => s.visual = if v.trim() == "wave" { Visual::Wave } else { Visual::Bars },
+            "beta" => s.beta = flag(v),
             _ => {}
         }
     }
@@ -125,11 +129,12 @@ pub fn format(s: &Settings) -> String {
     }
     o += &format!("source={}\n", one_line(&source_to_str(&s.source)));
     o += &format!(
-        "keep_local={}\nplay_local={}\nauto_receive={}\nvisual={}\n",
+        "keep_local={}\nplay_local={}\nauto_receive={}\nvisual={}\nbeta={}\n",
         s.keep_local as u8,
         s.play_local as u8,
         s.auto_receive as u8,
-        if s.visual == Visual::Wave { "wave" } else { "bars" }
+        if s.visual == Visual::Wave { "wave" } else { "bars" },
+        s.beta as u8
     );
     o
 }
@@ -169,6 +174,7 @@ mod tests {
             play_local: false,
             auto_receive: false,
             visual: Visual::Wave,
+            beta: false,
         };
         assert_eq!(parse(&format(&s)), s);
     }
@@ -178,7 +184,7 @@ mod tests {
         let s = parse("mode=music\nvolume=0.5\n");
         assert_eq!(s.mode, Mode::Music);
         assert_eq!(s.volume, 0.5);
-        assert!(s.auto_receive && s.play_local);
+        assert!(s.auto_receive && s.play_local && s.beta);
     }
 
     #[test]

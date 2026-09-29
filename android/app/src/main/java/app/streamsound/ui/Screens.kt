@@ -177,7 +177,7 @@ private fun BottomNav(m: UiModel) {
 
 @Composable
 private fun UpdateBanner(m: UiModel, host: Host) {
-    val build = m.update.readyBuild ?: return
+    val version = m.update.ready ?: return
     val shape = RoundedCornerShape(16.dp)
     Row(
         Modifier
@@ -189,7 +189,10 @@ private fun UpdateBanner(m: UiModel, host: Host) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("มีเวอร์ชันใหม่ (build $build)", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (m.update.readyBeta) "มีเวอร์ชันเบต้าใหม่ v$version" else "มีเวอร์ชันใหม่ v$version",
+                color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+            )
             Text("ติดตั้งทับได้เลย การตั้งค่ายังอยู่ครบ", color = Color.White.copy(alpha = 0.75f), fontSize = 12.5.sp)
         }
         Box(
@@ -669,7 +672,7 @@ private fun SettingsTab(m: UiModel, host: Host) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Title("อัปเดต")
-                Hint("เวอร์ชันนี้: build ${m.update.build}")
+                Hint("เวอร์ชันนี้: ${m.update.version}")
             }
             Box(
                 Modifier
@@ -685,6 +688,12 @@ private fun SettingsTab(m: UiModel, host: Host) {
         if (m.update.text.isNotEmpty()) {
             Gap(6.dp)
             Hint(m.update.text)
+        }
+        Gap(10.dp)
+        ToggleRow("รับเวอร์ชันเบต้าด้วย", "ได้ของใหม่ก่อน แต่อาจยังไม่เสถียรเท่าเวอร์ชันทางการ", m.betaUpdates) {
+            m.betaUpdates = it
+            m.save()
+            host.checkUpdate()
         }
         Gap(4.dp)
         Hint("แอปตรวจหาเวอร์ชันใหม่จาก GitHub ให้เองทุกครั้งที่เปิด", C.Text3)
