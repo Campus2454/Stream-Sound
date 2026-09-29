@@ -53,72 +53,82 @@ enum Updater {
         case newer(Release)
     }
 
-    /// Newest release with an iPhone build across `repos`; betas only when `beta`.
+    /// Newest release across `repos`; betas only when `beta`. Uses GitHub's
+    /// web pages, not its API: the API allows only 60 anonymous calls an
+    /// hour per home IP, too few for every device checking every 5 minutes.
     static func check(beta: Bool) async throws -> Check {
-        var best: (Version, Release)?
-        var any = false
+        var best: (Version, String, String)?  // version, tag, repo
         var lastError: Error?
         for repo in repos {
             do {
-                for r in try await releases(repo: repo, beta: beta) {
-                    any = true
-                    if best == nil || r.0 > best!.0 { best = r }
+                if let t = try await newestTag(repo: repo, beta: beta), best == nil || t.0 > best!.0 {
+                    best = (t.0, t.1, repo)
                 }
             } catch {
                 lastError = error
             }
         }
-        if !any, let e = lastError { throw e }
-        guard let b = best else { return .noRelease }
-        if let cur = current, b.0 <= cur { return .upToDate }
-        return .newer(b.1)
+        guard let b = best else {
+            if let e = lastError { throw e }
+            return .noRelease
+        }
+        let (v, tag, repo) = b
+        if let cur = current, v <= cur { return .upToDate }
+        // The iPhone build is attached a few minutes after the release
+        // appears; until then say nothing and look again next time.
+        guard try await exists("https://github.com/\(repo)/releases/download/\(tag)/\(asset)") else { return .upToDate }
+        let page = URL(string: "https://github.com/\(repo)/releases/tag/\(tag)")!
+        return .newer(Release(version: v.description, beta: v.beta, page: page))
     }
 
-    private static func releases(repo: String, beta: Bool) async throws -> [(Version, Release)] {
-        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30")!)
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+    private static func request(_ url: String, method: String = "GET") -> URLRequest {
+        var req = URLRequest(url: URL(string: url)!)
+        req.httpMethod = method
         req.setValue("StreamSound-updater", forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 15
-        // Checked every 5 minutes: ask "changed since last time?" so the
-        // answer (304) doesn't count against GitHub's 60 calls/hour limit.
         req.cachePolicy = .reloadIgnoringLocalCacheData
-        let d = UserDefaults.standard
-        let etagKey = "updateETag.\(repo)", bodyKey = "updateBody.\(repo)"
-        let cached = d.data(forKey: bodyKey)
-        if cached != nil, let tag = d.string(forKey: etagKey) {
-            req.setValue(tag, forHTTPHeaderField: "If-None-Match")
-        }
-        let (fresh, resp) = try await URLSession.shared.data(for: req)
-        let http = resp as? HTTPURLResponse
-        let code = http?.statusCode ?? 0
-        if code == 404 { return [] }
-        let data: Data
-        if code == 304, let c = cached {
-            data = c
-        } else if code == 200 {
-            data = fresh
-            if let tag = http?.value(forHTTPHeaderField: "ETag") {
-                d.set(tag, forKey: etagKey)
-                d.set(fresh, forKey: bodyKey)
+        req.timeoutInterval = 15
+        return req
+    }
+
+    private static func newestTag(repo: String, beta: Bool) async throws -> (Version, String)? {
+        if beta {
+            // The last 10 releases, betas (pre-releases) included.
+            let (data, resp) = try await URLSession.shared.data(for: request("https://github.com/\(repo)/releases.atom"))
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 404 { return nil }
+            guard code == 200, let text = String(data: data, encoding: .utf8) else { throw URLError(.badServerResponse) }
+            let re = try NSRegularExpression(pattern: "/releases/tag/(v[0-9.]+)")
+            let tags = re.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { m -> (Version, String)? in
+                guard let r = Range(m.range(at: 1), in: text) else { return nil }
+                let tag = String(text[r])
+                return Version(tag).map { ($0, tag) }
             }
-        } else {
-            throw URLError(.badServerResponse)
+            return tags.max { $0.0 < $1.0 }
         }
-        struct Rel: Decodable {
-            struct Asset: Decodable { let name: String }
-            let tag_name: String
-            let draft: Bool
-            let html_url: String
-            let assets: [Asset]
-        }
-        return try JSONDecoder().decode([Rel].self, from: data).compactMap { r in
-            // The iPhone build is attached a few minutes after the release appears.
-            guard !r.draft, r.assets.contains(where: { $0.name == asset }),
-                  let v = Version(r.tag_name), beta || !v.beta,
-                  let page = URL(string: r.html_url) else { return nil }
-            return (v, Release(version: v.description, beta: v.beta, page: page))
+        // Official only: /releases/latest redirects to /releases/tag/vX.Y.
+        let (_, resp) = try await noRedirect.data(for: request("https://github.com/\(repo)/releases/latest"))
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if http.statusCode == 404 { return nil }
+        guard (300..<400).contains(http.statusCode),
+              let loc = http.value(forHTTPHeaderField: "Location"),
+              let r = loc.range(of: "/releases/tag/") else { return nil }
+        let tag = String(loc[r.upperBound...]).components(separatedBy: CharacterSet(charactersIn: "/?#")).first ?? ""
+        return Version(tag).map { ($0, tag) }
+    }
+
+    private static func exists(_ url: String) async throws -> Bool {
+        let (_, resp) = try await URLSession.shared.data(for: request(url, method: "HEAD"))
+        return (resp as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    private final class StopRedirects: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
         }
     }
+
+    private static let noRedirect = URLSession(configuration: .ephemeral, delegate: StopRedirects(), delegateQueue: nil)
 
     /// Open SideStore (or AltStore) so it can install the update (betas:
     /// the release page, since the SideStore source follows official releases); with
