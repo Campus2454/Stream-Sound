@@ -15,7 +15,7 @@ print(json.dumps({
     "identifier": "app.streamsound.source",
     "subtitle": "เสียงจากเครื่องหนึ่งไปอีกเครื่องใน Wi-Fi เดียวกัน",
     "sourceURL": f"{base}/latest/download/StreamSound-source.json",
-    "iconURL": f"https://raw.githubusercontent.com/{repo}/main/ios/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+    "iconURL": f"{base}/latest/download/StreamSound-icon.png",
     "tintColor": "#E62639",
     "apps": [{
         "name": "Stream Sound",
@@ -23,7 +23,7 @@ print(json.dumps({
         "developerName": "Stream Sound",
         "subtitle": "รับส่งเสียงข้ามเครื่องแบบหน่วงต่ำ",
         "localizedDescription": "รับเสียงจาก PC / Android มาเล่นบน iPhone และส่งเสียงทั้งเครื่องของ iPhone ไปเครื่องอื่นใน Wi-Fi เดียวกัน",
-        "iconURL": f"https://raw.githubusercontent.com/{repo}/main/ios/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+        "iconURL": f"{base}/latest/download/StreamSound-icon.png",
         "tintColor": "#E62639",
         "category": "utilities",
         "versions": [{

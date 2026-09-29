@@ -6,13 +6,16 @@ import UIKit
 /// is out and hands over to SideStore (or AltStore), which re-signs and
 /// installs it from the Stream Sound source CI publishes with each release.
 enum Updater {
-    /// Where CI publishes releases (the same place the desktop and Android apps update from).
-    static let repo = "Campus2454/Audio-Streaming"
+    /// Where CI publishes releases, same list as the desktop and Android
+    /// updaters: the public releases-only repo first, then the (private)
+    /// source repo. The newest build found wins.
+    static let repos = ["Campus2454/Audio-Streaming-Releases", "Campus2454/Stream-Sound"]
     static let asset = "StreamSound.ipa"
     static let sourceAsset = "StreamSound-source.json"
 
-    static var sourceURL: String { "https://github.com/\(repo)/releases/latest/download/\(sourceAsset)" }
-    static var releasesPage: URL { URL(string: "https://github.com/\(repo)/releases/latest")! }
+    /// The public repo, which SideStore can read without a GitHub login.
+    static var sourceURL: String { "https://github.com/\(repos[0])/releases/latest/download/\(sourceAsset)" }
+    static var releasesPage: URL { URL(string: "https://github.com/\(repos[0])/releases/latest")! }
 
     static var currentBuild: Int {
         Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0
@@ -25,6 +28,28 @@ enum Updater {
     }
 
     static func check() async throws -> Check {
+        var best: Check = .noRelease
+        var lastError: Error?
+        for repo in repos {
+            do {
+                switch try await check(repo: repo) {
+                case .newer(let b):
+                    if case .newer(let have) = best, have >= b { continue }
+                    best = .newer(build: b)
+                case .upToDate:
+                    if best == .noRelease { best = .upToDate }
+                case .noRelease:
+                    break
+                }
+            } catch {
+                lastError = error
+            }
+        }
+        if best == .noRelease, let e = lastError { throw e }
+        return best
+    }
+
+    private static func check(repo: String) async throws -> Check {
         var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("StreamSound-updater", forHTTPHeaderField: "User-Agent")
