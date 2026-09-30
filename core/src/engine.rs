@@ -234,6 +234,23 @@ impl Engine {
         self.mixer.lock().volume = v.clamp(0.0, 2.0);
     }
 
+    /// Volume for everything one device sends here, on top of `set_volume`.
+    /// `from` is the device's IP as in `StreamStats::from`; 0..2, 1 = as sent.
+    /// Kept for devices that are not sending yet, so it can be set at start.
+    pub fn set_source_volume(&self, from: &str, v: f32) {
+        let v = if v.is_finite() { v.clamp(0.0, 2.0) } else { 1.0 };
+        let mut m = self.mixer.lock();
+        if v == 1.0 {
+            m.source_volume.remove(from);
+        } else {
+            m.source_volume.insert(from.to_string(), v);
+        }
+    }
+
+    pub fn source_volume(&self, from: &str) -> f32 {
+        self.mixer.lock().source_volume.get(from).copied().unwrap_or(1.0)
+    }
+
     /// This device's name as other devices see it.
     pub fn name(&self) -> String {
         self.name.read().clone()

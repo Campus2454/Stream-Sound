@@ -351,46 +351,70 @@ fun Visualizer(style: VizStyle, height: Dp, data: (VizStyle, Int) -> FloatArray?
 
 // ---- volume tube --------------------------------------------------------------
 
-private fun volumeAt(x: Float, width: Int, r: Float, max: Float): Float {
-    var v = ((x - r) / (width - 2 * r)).coerceIn(0f, 1f) * max
-    if (abs(v - 1f) < 0.03f * max) v = 1f // gentle snap to 100 %
-    return v
+/** Loudest volume the sliders reach (200 %). */
+const val MAX_VOLUME = 2f
+/** Share of a volume slider's length that covers 0–100 %; the rest is 100–200 %. */
+private const val UNITY_POS = 0.75f
+
+/** Where a volume (0..2) sits along a slider (0..1). */
+fun volumeToPos(v: Float): Float {
+    val x = v.coerceIn(0f, MAX_VOLUME)
+    return if (x <= 1f) x * UNITY_POS else UNITY_POS + (x - 1f) / (MAX_VOLUME - 1f) * (1f - UNITY_POS)
+}
+
+/** The volume at a point along a slider (0..1). */
+fun posToVolume(p: Float): Float {
+    val x = p.coerceIn(0f, 1f)
+    return if (x <= UNITY_POS) x / UNITY_POS else 1f + (x - UNITY_POS) / (1f - UNITY_POS) * (MAX_VOLUME - 1f)
+}
+
+private fun volumeAt(x: Float, width: Int, r: Float): Float {
+    val at = ((x - r) / (width - 2 * r)).coerceIn(0f, 1f)
+    return if (abs(at - UNITY_POS) < 0.02f) 1f else posToVolume(at) // gentle snap to 100 %
 }
 
 /**
- * Volume control drawn on the level meter: the knob sets the volume (0..[max])
- * and the live [level] (before volume, 0..1) fills the tube up to the knob.
+ * Volume control drawn on the level meter: the knob sets the volume (0–200 %,
+ * with 100 % three quarters along) and the live [level] (before volume, 0..1)
+ * fills the tube up to the knob.
  */
 @Composable
-fun VolumeTube(volume: Float, max: Float, level: Float, modifier: Modifier, onChange: (Float) -> Unit, onDone: () -> Unit) {
+fun VolumeTube(
+    volume: Float,
+    level: Float,
+    modifier: Modifier,
+    height: Dp = 30.dp,
+    onChange: (Float) -> Unit,
+    onDone: () -> Unit,
+) {
     val change by rememberUpdatedState(onChange)
     val done by rememberUpdatedState(onDone)
-    val knob = 11.dp
+    val knob = height * 0.37f
     Canvas(
         modifier
-            .height(30.dp)
-            .pointerInput(max) {
+            .height(height)
+            .pointerInput(Unit) {
                 detectTapGestures { p ->
-                    change(volumeAt(p.x, size.width, knob.toPx(), max))
+                    change(volumeAt(p.x, size.width, knob.toPx()))
                     done()
                 }
             }
-            .pointerInput(max) {
+            .pointerInput(Unit) {
                 detectHorizontalDragGestures(onDragEnd = { done() }) { c, _ ->
                     c.consume()
-                    change(volumeAt(c.position.x, size.width, knob.toPx(), max))
+                    change(volumeAt(c.position.x, size.width, knob.toPx()))
                 }
             }
     ) {
         val r = knob.toPx()
         val x0 = r
         val x1 = size.width - r
-        val kx = x0 + (x1 - x0) * (volume / max).coerceIn(0f, 1f)
+        val kx = x0 + (x1 - x0) * volumeToPos(volume)
         val track = size.height - 2.dp.toPx()
         val top = (size.height - track) / 2
         drawRoundRect(C.Surface2, Offset(0f, top), Size(size.width, track), CornerRadius(track / 2))
         drawRoundRect(C.Outline, Offset(0f, top), Size(size.width, track), CornerRadius(track / 2), style = Stroke(1.dp.toPx()))
-        val pad = 4.dp.toPx()
+        val pad = track * 0.14f
         val ih = track - 2 * pad
         val iy = top + pad
         drawRoundRect(C.Red.copy(alpha = 0.14f), Offset(pad, iy), Size(max(kx - pad, ih), ih), CornerRadius(ih / 2))
@@ -403,12 +427,13 @@ fun VolumeTube(volume: Float, max: Float, level: Float, modifier: Modifier, onCh
                 cornerRadius = CornerRadius(ih / 2),
             )
         }
-        val x100 = x0 + (x1 - x0) / max
-        drawLine(Color.White.copy(alpha = 0.28f), Offset(x100, top + 7.dp.toPx()), Offset(x100, top + track - 7.dp.toPx()), 1.5.dp.toPx())
+        val x100 = x0 + (x1 - x0) * UNITY_POS
+        val inset = track * 0.23f
+        drawLine(Color.White.copy(alpha = 0.28f), Offset(x100, top + inset), Offset(x100, top + track - inset), 1.5.dp.toPx())
         val c = Offset(kx, size.height / 2)
         drawCircle(Color.Black.copy(alpha = 0.35f), r + 1.5.dp.toPx(), c + Offset(0f, 1.5.dp.toPx()))
         drawCircle(C.Red, r, c)
-        drawCircle(Color.White, r - 3.dp.toPx(), c)
+        drawCircle(Color.White, r * 0.73f, c)
     }
 }
 
@@ -505,9 +530,10 @@ fun Logo(size: Dp) {
     Canvas(Modifier.size(size)) {
         val w = this.size.width
         drawRoundRect(Brush.horizontalGradient(listOf(C.Red, C.RedHi)), cornerRadius = CornerRadius(w * 0.24f))
-        val heights = listOf(0.34f, 0.58f, 0.82f, 0.58f, 0.34f)
-        val bw = w * 0.085f
-        val gap = w * 0.065f
+        // Same bars as the app icon.
+        val heights = listOf(0.205f, 0.41f, 0.586f, 0.352f, 0.234f)
+        val bw = w * 0.09f
+        val gap = w * 0.062f
         val total = 5 * bw + 4 * gap
         heights.forEachIndexed { i, h ->
             val x = w / 2 - total / 2 + i * (bw + gap)
