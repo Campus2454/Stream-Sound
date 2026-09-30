@@ -531,9 +531,7 @@ private fun StreamRow(m: UiModel, host: Host, s: StreamInfo, outMs: Double, stut
                 GlyphIcon(if (vol == 0f) Glyph.Muted else Glyph.Speaker, tint, 18.dp)
             }
             Spacer(Modifier.width(6.dp))
-            Box(Modifier.clip(CircleShape).background(color.copy(alpha = 0.14f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
-                Text("${total.roundToInt()} ms", color = color, fontSize = 13.sp)
-            }
+            DelayPill(total, color)
         }
         if (volumeOpen) {
             Row(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {

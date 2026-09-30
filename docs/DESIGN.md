@@ -66,7 +66,9 @@ the bottom for ~3 s.
 2. "กำลังรับจาก": one row per incoming stream: name, sender IP, then a small
    speaker button for that device's own volume, then the delay pill. The pill
    is only the number ("32 ms"), green when stable, amber after a stutter in
-   the last 10 s; no words. The speaker opens a small volume tube (same curve,
+   the last 10 s; no words. From 1000 ms it shows seconds with one decimal
+   ("1.2 s"). Its width is fixed to fit "888 ms" with the text centred, so
+   neither the pill nor the speaker moves as the number changes. The speaker opens a small volume tube (same curve,
    0–200 %) with the percentage: on hover on desktop (it stays while the
    pointer is on it and for 0.4 s after), on tap on phones. Clicking the
    desktop speaker mutes / unmutes that device. The speaker is redHi when the

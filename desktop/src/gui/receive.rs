@@ -172,13 +172,14 @@ fn stream_row(ui: &mut Ui, s: &StreamStats, delay: f64, stutter: bool, open: boo
     p.text(c, Align2::CENTER_CENTER, t(initial(&s.name)), font(16.0), Color32::WHITE);
     // Just the delay; its colour says whether it stuttered lately.
     let color = if stutter { AMBER } else { GREEN };
-    let pill_g = p.layout_no_wrap(format!("{delay:.0} ms"), font(13.0), color);
-    let pill = Rect::from_min_size(
-        pos2(rect.right() - 14.0 - pill_g.size().x - 20.0, rect.center().y - 13.0),
-        vec2(pill_g.size().x + 20.0, 26.0),
-    );
+    // A fixed width, so the pill and the speaker beside it don't move as the
+    // number changes.
+    let pill_g = p.layout_no_wrap(delay_text(delay), font(13.0), color);
+    let widest = p.layout_no_wrap(DELAY_TEXT_WIDEST.into(), font(13.0), color).size().x;
+    let pill_w = pill_g.size().x.max(widest) + 20.0;
+    let pill = Rect::from_min_size(pos2(rect.right() - 14.0 - pill_w, rect.center().y - 13.0), vec2(pill_w, 26.0));
     p.rect_filled(pill, 13, color.gamma_multiply(0.14));
-    p.galley(pos2(pill.left() + 10.0, pill.center().y - pill_g.size().y / 2.0), pill_g, color);
+    p.galley(pill.center() - pill_g.size() / 2.0, pill_g, color);
     let speaker = Rect::from_center_size(pos2(pill.left() - 22.0, rect.center().y), vec2(32.0, 32.0));
     let x = rect.left() + 58.0;
     let max_w = speaker.left() - x - 6.0;

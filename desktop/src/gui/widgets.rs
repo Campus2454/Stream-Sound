@@ -48,6 +48,22 @@ pub fn hint(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(t(text)).size(12.5).color(TEXT2));
 }
 
+/// A delay for the delay pill: "32 ms", or seconds from 1000 ms ("1.2 s")
+/// so it always fits the pill's fixed width.
+pub fn delay_text(ms: f64) -> String {
+    let ms = if ms.is_finite() { ms.max(0.0) } else { 0.0 };
+    if ms.round() < 1000.0 {
+        format!("{ms:.0} ms")
+    } else if ms < 99_950.0 {
+        format!("{:.1} s", ms / 1000.0)
+    } else {
+        format!("{:.0} s", ms / 1000.0)
+    }
+}
+
+/// The widest text the delay pill is sized for.
+pub const DELAY_TEXT_WIDEST: &str = "888 ms";
+
 /// Status pill with an optional (pulsing) dot.
 pub fn pill(ui: &mut Ui, text: &str, color: Color32, dot: bool, pulse: bool) -> Response {
     let galley = ui.painter().layout_no_wrap(t(text), font(13.0), color);
@@ -513,6 +529,18 @@ pub fn link_button(ui: &mut Ui, text: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delay_switches_to_seconds_at_1000_ms() {
+        assert_eq!(delay_text(32.4), "32 ms");
+        assert_eq!(delay_text(999.4), "999 ms");
+        assert_eq!(delay_text(999.6), "1.0 s");
+        assert_eq!(delay_text(1234.0), "1.2 s");
+        assert_eq!(delay_text(12_345.0), "12.3 s");
+        assert_eq!(delay_text(123_456.0), "123 s");
+        assert_eq!(delay_text(-3.0), "0 ms");
+        assert_eq!(delay_text(f64::NAN), "0 ms");
+    }
 
     #[test]
     fn volume_slider_curve() {
