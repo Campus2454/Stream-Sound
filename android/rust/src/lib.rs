@@ -307,6 +307,23 @@ pub extern "system" fn Java_app_streamsound_Native_setVolume(_env: JNIEnv, _this
     })
 }
 
+/// Volume for one sending device, by its IP (`from` in the stream list), 0..2.
+#[no_mangle]
+pub extern "system" fn Java_app_streamsound_Native_setSourceVolume(
+    mut env: JNIEnv,
+    _this: JObject,
+    h: jlong,
+    from: JString,
+    v: jfloat,
+) {
+    let from = jstr(&mut env, &from);
+    guard((), || {
+        if let Some(x) = handle(h) {
+            x.engine.read().set_source_volume(&from, v);
+        }
+    })
+}
+
 /// "game", "balanced" or "music".
 #[no_mangle]
 pub extern "system" fn Java_app_streamsound_Native_setMode(mut env: JNIEnv, _this: JObject, h: jlong, mode: JString) {

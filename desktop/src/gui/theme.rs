@@ -89,55 +89,12 @@ pub fn setup(ctx: &egui::Context) -> Gradients {
     Gradients::new(ctx)
 }
 
-/// App icon: a red rounded square with five white equalizer bars.
+/// The app icon (the same picture as the phone apps), also built into the
+/// Windows .exe from assets/icon.ico.
+pub const ICON_PNG: &[u8] = include_bytes!("../../assets/icon.png");
+
 pub fn app_icon() -> egui::IconData {
-    const N: usize = 128;
-    let mut rgba = vec![0u8; N * N * 4];
-    let r = 28.0f32;
-    let bars = [0.36f32, 0.62, 0.86, 0.62, 0.36];
-    for y in 0..N {
-        for x in 0..N {
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            // Distance outside the rounded square, for a soft edge.
-            let dx = (fx - N as f32 / 2.0).abs() - (N as f32 / 2.0 - r);
-            let dy = (fy - N as f32 / 2.0).abs() - (N as f32 / 2.0 - r);
-            let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() - r;
-            let a = (0.5 - outside).clamp(0.0, 1.0);
-            if a == 0.0 {
-                continue;
-            }
-            // Top-left slightly brighter than bottom-right.
-            let g = (fx + fy) / (2.0 * N as f32);
-            let mut c = [
-                (0xFF as f32 * (1.0 - g) + 0xD0 as f32 * g) as u8,
-                (0x4A as f32 * (1.0 - g) + 0x1C as f32 * g) as u8,
-                (0x5A as f32 * (1.0 - g) + 0x2E as f32 * g) as u8,
-            ];
-            let bar_w = 11.0f32;
-            let gap = 8.0f32;
-            let total = bars.len() as f32 * bar_w + (bars.len() - 1) as f32 * gap;
-            let x0 = (N as f32 - total) / 2.0;
-            for (i, h) in bars.iter().enumerate() {
-                let bx = x0 + i as f32 * (bar_w + gap);
-                let half = h * N as f32 * 0.5 * 0.9;
-                let cy = N as f32 / 2.0;
-                // Capsule: rounded ends.
-                let px = (fx - (bx + bar_w / 2.0)).abs() - 0.0;
-                let py = ((fy - cy).abs() - (half - bar_w / 2.0)).max(0.0);
-                let d = (px.powi(2) + py.powi(2)).sqrt() - bar_w / 2.0;
-                let cov = (0.5 - d).clamp(0.0, 1.0);
-                if cov > 0.0 {
-                    for ch in &mut c {
-                        *ch = (*ch as f32 * (1.0 - cov) + 255.0 * cov) as u8;
-                    }
-                }
-            }
-            let o = (y * N + x) * 4;
-            rgba[o..o + 3].copy_from_slice(&c);
-            rgba[o + 3] = (a * 255.0) as u8;
-        }
-    }
-    egui::IconData { rgba, width: N as u32, height: N as u32 }
+    eframe::icon_data::from_png_bytes(ICON_PNG).unwrap_or_default()
 }
 
 /// egui draws text without OpenType shaping, so Thai tone marks would sit on

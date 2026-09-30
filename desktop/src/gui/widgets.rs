@@ -293,39 +293,62 @@ impl Viz {
     }
 }
 
-/// Volume control drawn on the level meter. `level` is the level before
-/// volume (0..1); returns a response that is `changed()` when moved.
-pub fn volume_tube(ui: &mut Ui, g: &Gradients, volume: &mut f32, max: f32, level: f32) -> Response {
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click_and_drag());
-    let knob_r = 11.0;
+/// Loudest volume the sliders reach (200 %).
+pub const MAX_VOLUME: f32 = 2.0;
+/// Share of a volume slider's length that covers 0–100 %; the rest is 100–200 %.
+const UNITY_POS: f32 = 0.75;
+
+/// Where a volume (0..=2) sits along a slider (0..=1).
+pub fn volume_to_pos(v: f32) -> f32 {
+    let v = v.clamp(0.0, MAX_VOLUME);
+    if v <= 1.0 {
+        v * UNITY_POS
+    } else {
+        UNITY_POS + (v - 1.0) / (MAX_VOLUME - 1.0) * (1.0 - UNITY_POS)
+    }
+}
+
+/// The volume at a point along a slider (0..=1).
+pub fn pos_to_volume(p: f32) -> f32 {
+    let p = p.clamp(0.0, 1.0);
+    if p <= UNITY_POS {
+        p / UNITY_POS
+    } else {
+        1.0 + (p - UNITY_POS) / (1.0 - UNITY_POS) * (MAX_VOLUME - 1.0)
+    }
+}
+
+/// Volume control drawn on the level meter, full width. `level` is the
+/// level before volume (0..1); returns a response that is `changed()` when moved.
+pub fn volume_tube(ui: &mut Ui, g: &Gradients, volume: &mut f32, level: f32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click_and_drag());
+    volume_tube_at(ui, g, rect, resp, volume, level)
+}
+
+/// The same control in a rect the caller has already claimed (the smaller
+/// per-device slider). The mouse wheel is deliberately ignored, so scrolling
+/// the page never changes the volume.
+pub fn volume_tube_at(ui: &Ui, g: &Gradients, rect: Rect, mut resp: Response, volume: &mut f32, level: f32) -> Response {
+    let knob_r = (rect.height() * 0.37).round();
     let x0 = rect.left() + knob_r;
     let x1 = rect.right() - knob_r;
     if resp.clicked() || resp.dragged() {
         if let Some(pos) = resp.interact_pointer_pos() {
-            let mut v = ((pos.x - x0) / (x1 - x0)).clamp(0.0, 1.0) * max;
-            if (v - 1.0).abs() < 0.03 * max {
-                v = 1.0; // gentle snap to 100 %
-            }
+            let at = ((pos.x - x0) / (x1 - x0)).clamp(0.0, 1.0);
+            // Gentle snap to 100 %.
+            let v = if (at - UNITY_POS).abs() < 0.02 { 1.0 } else { pos_to_volume(at) };
             if (v - *volume).abs() > f32::EPSILON {
                 *volume = v;
                 resp.mark_changed();
             }
         }
     }
-    if resp.hovered() {
-        let scroll = ui.input(|i| i.raw_scroll_delta.y);
-        if scroll != 0.0 {
-            *volume = (*volume + scroll / 600.0).clamp(0.0, max);
-            resp.mark_changed();
-        }
-    }
-    let frac = (*volume / max).clamp(0.0, 1.0);
-    let kx = egui::lerp(x0..=x1, frac);
+    let kx = egui::lerp(x0..=x1, volume_to_pos(*volume));
     let p = ui.painter();
     let track = rect.shrink2(vec2(0.0, 1.0));
     p.rect(track, radius(track.height() / 2.0), SURFACE2, Stroke::new(1.0, OUTLINE), StrokeKind::Inside);
     // The volume's share of the tube, faintly, so it reads even in silence.
-    let inner = track.shrink(4.0);
+    let inner = track.shrink((track.height() * 0.14).round());
     let vol_rect = Rect::from_min_max(inner.min, pos2(kx.max(inner.left() + inner.height()), inner.bottom()));
     p.rect_filled(vol_rect, radius(inner.height() / 2.0), RED.gamma_multiply(0.14));
     // Live level, filling up to the knob at most.
@@ -335,16 +358,17 @@ pub fn volume_tube(ui: &mut Ui, g: &Gradients, volume: &mut f32, max: f32, level
         gradient_rect(ui, lr, inner.height() / 2.0, &g.horizontal, Gradients::UV_H, Color32::WHITE);
     }
     // 100 % mark.
-    let x100 = egui::lerp(x0..=x1, 1.0 / max);
+    let x100 = egui::lerp(x0..=x1, UNITY_POS);
+    let inset = track.height() * 0.23;
     p.line_segment(
-        [pos2(x100, track.top() + 7.0), pos2(x100, track.bottom() - 7.0)],
+        [pos2(x100, track.top() + inset), pos2(x100, track.bottom() - inset)],
         Stroke::new(1.5, Color32::from_white_alpha(70)),
     );
     let c = pos2(kx, rect.center().y);
     let grow = ui.ctx().animate_bool_with_time(resp.id, resp.hovered() || resp.dragged(), 0.1);
     p.circle_filled(c + vec2(0.0, 1.5), knob_r + 1.5, Color32::from_black_alpha(90));
     p.circle_filled(c, knob_r + grow * 1.5, RED);
-    p.circle_filled(c, knob_r + grow * 1.5 - 3.0, Color32::WHITE);
+    p.circle_filled(c, knob_r + grow * 1.5 - knob_r * 0.27, Color32::WHITE);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -457,9 +481,10 @@ pub fn copy_icon(ui: &Ui, rect: Rect, color: Color32) {
 pub fn logo(ui: &mut Ui, g: &Gradients, size: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     gradient_rect(ui, rect, size * 0.24, &g.horizontal, Gradients::UV_H, Color32::WHITE);
-    let heights = [0.34f32, 0.58, 0.82, 0.58, 0.34];
-    let bw = size * 0.085;
-    let gap = size * 0.065;
+    // Same bars as the app icon (assets/icon.png).
+    let heights = [0.205f32, 0.41, 0.586, 0.352, 0.234];
+    let bw = size * 0.09;
+    let gap = size * 0.062;
     let total = 5.0 * bw + 4.0 * gap;
     let p = ui.painter();
     for (i, h) in heights.iter().enumerate() {
@@ -483,4 +508,25 @@ pub fn icon_button(ui: &mut Ui, size: f32, draw: impl FnOnce(&Ui, Rect, Color32)
 pub fn link_button(ui: &mut Ui, text: &str) -> Response {
     let r = ui.add(egui::Label::new(RichText::new(t(text)).size(13.5).color(RED_HI)).sense(Sense::click()));
     r.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volume_slider_curve() {
+        // 75 % of the length is 0–100 %, the last 25 % is 100–200 %.
+        assert_eq!(volume_to_pos(0.0), 0.0);
+        assert_eq!(volume_to_pos(0.5), 0.375);
+        assert_eq!(volume_to_pos(1.0), 0.75);
+        assert_eq!(volume_to_pos(1.5), 0.875);
+        assert_eq!(volume_to_pos(2.0), 1.0);
+        assert_eq!(volume_to_pos(9.0), 1.0);
+        for i in 0..=100 {
+            let p = i as f32 / 100.0;
+            assert!((volume_to_pos(pos_to_volume(p)) - p).abs() < 1e-6);
+        }
+        assert!((pos_to_volume(0.76) - 1.04).abs() < 1e-5, "just past 100 % moves 4 % per 1 % of length");
+    }
 }

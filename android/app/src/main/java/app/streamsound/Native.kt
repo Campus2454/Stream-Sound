@@ -34,6 +34,8 @@ object Native {
     external fun setForward(handle: Long, dests: String)
     external fun setPlayLocal(handle: Long, on: Boolean)
     external fun setVolume(handle: Long, volume: Float)
+    /** Volume for one sending device (its IP, "from" in the stream list), 0..2. */
+    external fun setSourceVolume(handle: Long, from: String, volume: Float)
     external fun setMode(handle: Long, mode: String)
 
     /**

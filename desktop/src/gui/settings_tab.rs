@@ -225,6 +225,11 @@ fn manual_card(app: &mut App, ui: &mut Ui) {
 fn general_card(app: &mut App, ui: &mut Ui) {
     let mut visual_changed = false;
     let mut auto_changed = false;
+    let mut boot_changed = false;
+    // What the system says now, so switching it off in Task Manager or the
+    // desktop's settings shows here too.
+    app.refresh_autostart(false);
+    let mut boot = app.autostart;
     card(ui, |ui| {
         section_title(ui, "ทั่วไป");
         ui.add_space(6.0);
@@ -245,9 +250,23 @@ fn general_card(app: &mut App, ui: &mut Ui) {
             &mut app.s.auto_receive,
         )
         .changed();
+        ui.add_space(6.0);
+        let tray = app.tray.as_ref().is_some_and(|t| t.available());
+        let what = if tray { "เปิดแอปไว้ในถาดตอนเปิดเครื่อง ไม่ต้องเปิดเอง" } else { "เปิดแอปให้เองตอนเปิดเครื่อง" };
+        boot_changed = toggle_row(ui, "เปิดพร้อมเครื่อง", Some(what), &mut boot).changed();
+        if tray {
+            ui.add_space(6.0);
+            hint(ui, "ปิดหน้าต่างแล้วแอปจะไปอยู่ในถาดข้างนาฬิกา และยังรับส่งเสียงต่อ คลิกไอคอนเพื่อเปิดอีกครั้ง คลิกขวาแล้วเลือก \"ออก\" เพื่อปิดแอป");
+        }
     });
     if visual_changed || auto_changed {
         app.save();
+    }
+    if boot_changed {
+        if let Err(e) = os::set_autostart(boot) {
+            app.toast(t(format!("ตั้งให้เปิดพร้อมเครื่องไม่ได้: {e}")), true);
+        }
+        app.refresh_autostart(true);
     }
 }
 

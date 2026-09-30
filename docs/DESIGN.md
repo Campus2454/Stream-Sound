@@ -30,6 +30,12 @@ Header (every tab): logo mark (red rounded square with five white equalizer
 bars) + "Stream Sound"; on the right a device chip "● {name} · {ip}" (tap to
 copy the IP).
 
+App icon: the same mark, from ios/App/Assets.xcassets/AppIcon.appiconset
+(red vertical gradient #FE5969 → #E52538 → #B01A2A, five white capsule bars
+with heights 210 / 420 / 600 / 360 / 240 of 1024). Desktop uses
+desktop/assets/icon.png and icon.ico (rounded corners) for the window, the
+.exe and the tray; Android an adaptive icon drawn from the same numbers.
+
 Three tabs: **ส่งเสียง** (Send), **รับเสียง** (Receive), **ตั้งค่า**
 (Settings). Desktop: a segmented bar under the header. Phones: a bottom
 navigation bar. A red dot on Send while sending, a green dot on Receive
@@ -57,10 +63,17 @@ the bottom for ~3 s.
 1. Hero card: status pill ("● กำลังเล่น" green / "รอเสียง…" / "ปิดรับอยู่"),
    an on/off switch on the right, the visualizer (receive tap), then the
    **volume tube**: speaker button (mute) + tube + percentage.
-2. "กำลังรับจาก": one row per incoming stream: name, sender IP, a delay pill
-   ("32 ms", green when stable, amber after recent stutters). Tapping a row
-   shows the breakdown (capture + buffer + speaker) and lost / late / stutter
-   counts.
+2. "กำลังรับจาก": one row per incoming stream: name, sender IP, then a small
+   speaker button for that device's own volume, then the delay pill. The pill
+   is only the number ("32 ms"), green when stable, amber after a stutter in
+   the last 10 s; no words. The speaker opens a small volume tube (same curve,
+   0–200 %) with the percentage: on hover on desktop (it stays while the
+   pointer is on it and for 0.4 s after), on tap on phones. Clicking the
+   desktop speaker mutes / unmutes that device. The speaker is redHi when the
+   device isn't at 100 %, text3 when muted. Volumes are remembered per sender
+   IP and applied with `Engine::set_source_volume(ip, v)`, on top of the main
+   volume. Tapping a row shows the breakdown (capture + buffer + speaker) and
+   lost / late / stutter counts.
 3. "ส่งต่อ (ต่อเป็นทอด)" (collapsed by default): "เล่นเสียงที่เครื่องนี้"
    switch and device rows to forward to.
 
@@ -71,8 +84,9 @@ the bottom for ~3 s.
 2. "เครื่องนี้": editable device name, this device's IPs (tap to copy).
 3. "เพิ่มเครื่องด้วย IP": field + add button, list with remove.
 4. "ทั่วไป": visualizer style แท่งความถี่ (bars) / คลื่นเสียง (waveform) as a
-   segmented control, then switches: "เปิดรับเสียงทันทีเมื่อเปิดแอป" (all) and
-   "ให้จอเปิดค้างระหว่างสตรีม" (phones).
+   segmented control, then switches: "เปิดรับเสียงทันทีเมื่อเปิดแอป" (all),
+   "เปิดพร้อมเครื่อง" (desktop; mirrors the system's startup list, starts in
+   the tray) and "ให้จอเปิดค้างระหว่างสตรีม" (phones).
 5. "อัปเดต": version ("0.2", or "0.2.3 (เบต้า)" for a beta), status line,
    "ตรวจสอบอัปเดต", then the switch "รับเวอร์ชันเบต้าด้วย" (on by default).
    The update banner says "มีเวอร์ชันใหม่ v0.3" or "มีเวอร์ชันเบต้าใหม่ v0.3.1".
@@ -100,8 +114,21 @@ Engine API: `engine.scope(Tap::Send | Tap::Receive)` returns a snapshot with
 
 ## Volume tube
 
-A 28 px pill. Track `surface2`; a tick at 100 %. The knob (22 px white circle
-with a red ring) sits at the volume (0–150 %). The live level fills the tube
-from the left in a red → redHi gradient, scaled so it never passes the knob
-(fill = level before volume × knob position): the sound "fills the tube up
-to your volume". Drag or tap anywhere to set; scroll wheel on desktop.
+A 30 px pill (26 px for a device's own volume). Track `surface2`; a tick at
+100 %. The knob (white circle with a red ring) sits at the volume, 0–200 %,
+on a two-part scale: the first 75 % of the length is 0–100 %, the last 25 %
+is 100–200 % (position = 0.75·v up to 100 %, then 0.75 + 0.25·(v − 1)). It
+snaps to 100 % near the tick. The live level fills the tube from the left in
+a red → redHi gradient, scaled so it never passes the knob (fill = level
+before volume × knob position): the sound "fills the tube up to your
+volume". Drag or tap anywhere to set. The mouse wheel does nothing, so
+scrolling the page never changes the volume.
+
+## Desktop window
+
+Closing the window (X) hides it to the tray and keeps sending and receiving;
+clicking the tray icon brings it back, right-click shows "เปิด Stream Sound"
+and "ออก". Without a tray (e.g. GNOME without AppIndicator) closing quits.
+Opening the app again while it runs brings the running window forward. The
+window is kept inside the screen's work area (never under the taskbar) when
+it opens, comes back from the tray, or moves to a screen with other scaling.

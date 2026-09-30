@@ -7,6 +7,7 @@ mod settings_tab;
 mod theme;
 mod widgets;
 
+use crate::os;
 use crate::settings::{self, Settings, Visual};
 use crate::updater::{self, Status as UpdateStatus};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense};
@@ -16,14 +17,27 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+pub use theme::app_icon;
+#[cfg(target_os = "linux")]
+pub use theme::ICON_PNG;
 use theme::*;
 use widgets::*;
 
 /// How often a running app looks for a new version.
 const UPDATE_EVERY: Duration = Duration::from_secs(5 * 60);
 
-pub fn run() -> anyhow::Result<()> {
-    let options = eframe::NativeOptions {
+/// `start_hidden`: started with the computer, so open in the tray.
+/// `after_update`: started by an update, while the old copy is still closing.
+pub fn run(start_hidden: bool, after_update: bool) -> anyhow::Result<()> {
+    let claim = os::claim(after_update);
+    if matches!(claim, os::Claim::Second) {
+        // The copy that is already running has been asked to show itself.
+        return Ok(());
+    }
+    os::refresh_integration();
+    let tray = if os::can_hide_window() { os::Tray::new() } else { None };
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Stream Sound")
             .with_app_id("stream-sound")
@@ -32,8 +46,21 @@ pub fn run() -> anyhow::Result<()> {
             .with_min_inner_size([400.0, 560.0]),
         ..Default::default()
     };
-    eframe::run_native("Stream Sound", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
-        .map_err(|e| anyhow::anyhow!("{e}"))
+    #[cfg(target_os = "linux")]
+    if tray.is_some() {
+        // Wayland has no way to hide a window and bring it back, so with a
+        // tray to live in, use X11 (XWayland on a Wayland desktop).
+        options.event_loop_builder = Some(Box::new(|b| {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            b.with_x11();
+        }));
+    }
+    eframe::run_native(
+        "Stream Sound",
+        options,
+        Box::new(move |cc| Ok(Box::new(App::new(cc, tray, claim, start_hidden)))),
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -78,10 +105,28 @@ pub struct App {
     /// Per stream: underrun count last seen and when it last went up.
     stutter: HashMap<u32, (u64, Option<Instant>)>,
     relay_open: bool,
+    /// The stream whose device volume slider is open, and when the mouse was last on it.
+    device_hover: Option<(u32, Instant)>,
+    /// Volume to go back to when a muted device is unmuted, by IP.
+    device_unmute: HashMap<String, f32>,
+    tray: Option<os::Tray>,
+    requests: Arc<os::Requests>,
+    waker: Option<os::Waker>,
+    window: Option<raw_window_handle::RawWindowHandle>,
+    /// In the tray, with the window hidden.
+    hidden: bool,
+    /// Exit was chosen, so let the window close.
+    quitting: bool,
+    /// Frames left in which to try keeping the window clear of the taskbar.
+    fit_tries: u8,
+    last_scale: f32,
+    /// Starts with the computer, as last read from the system.
+    autostart: bool,
+    autostart_read: Option<Instant>,
 }
 
 impl App {
-    fn new(cc: &eframe::CreationContext<'_>) -> App {
+    fn new(cc: &eframe::CreationContext<'_>, tray: Option<os::Tray>, claim: os::Claim, start_hidden: bool) -> App {
         let g = theme::setup(&cc.egui_ctx);
         let s = settings::load();
         let mut cfg = EngineConfig { mode: s.mode, ..EngineConfig::default() };
@@ -90,6 +135,9 @@ impl App {
         }
         let engine = Engine::new(cfg);
         engine.set_volume(if s.muted { 0.0 } else { s.volume });
+        for (ip, v) in &s.source_volume {
+            engine.set_source_volume(ip, *v);
+        }
         engine.set_play_local(s.play_local);
         let mut app = App {
             ips: engine.local_ips(),
@@ -113,7 +161,32 @@ impl App {
             expanded: None,
             stutter: HashMap::new(),
             relay_open: false,
+            device_hover: None,
+            device_unmute: HashMap::new(),
+            tray,
+            requests: Arc::new(os::Requests::default()),
+            waker: None,
+            window: None,
+            hidden: false,
+            quitting: false,
+            fit_tries: 20,
+            last_scale: cc.egui_ctx.pixels_per_point(),
+            autostart: false,
+            autostart_read: None,
         };
+        use raw_window_handle::HasWindowHandle;
+        app.window = cc.window_handle().ok().map(|h| h.as_raw());
+        let waker = os::Waker::new(&cc.egui_ctx, app.window, app.requests.clone());
+        if let Some(tray) = &app.tray {
+            tray.connect(waker.clone());
+        }
+        app.waker = Some(waker.clone());
+        // Opening the app again brings this window back instead.
+        claim.serve(move || waker.show());
+        if start_hidden && app.in_tray() {
+            os::hide_window(&cc.egui_ctx);
+            app.hidden = true;
+        }
         if app.s.auto_receive {
             // Receive right away so other devices can send here.
             if app.engine.start_receiving().is_err() {
@@ -127,6 +200,71 @@ impl App {
 
     fn save(&self) {
         settings::save(&self.s);
+    }
+
+    /// Whether closing the window should hide it in the tray.
+    fn in_tray(&self) -> bool {
+        self.tray.as_ref().is_some_and(|t| t.available())
+    }
+
+    /// Re-read whether the app starts with the computer, at most every few
+    /// seconds unless `now`.
+    fn refresh_autostart(&mut self, now: bool) {
+        if now || self.autostart_read.is_none_or(|t| t.elapsed() > Duration::from_secs(3)) {
+            self.autostart = os::autostart_enabled();
+            self.autostart_read = Some(Instant::now());
+        }
+    }
+
+    /// Close button, tray menu and second copies of the app.
+    fn window_events(&mut self, ctx: &egui::Context) {
+        if self.requests.take_quit() {
+            self.quitting = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if self.requests.take_show() {
+            os::show_window(ctx);
+            if self.hidden {
+                self.hidden = false;
+                self.fit_tries = 20;
+            }
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && self.in_tray() {
+            // Keep running (and receiving) in the tray.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            os::hide_window(ctx);
+            self.hidden = true;
+        }
+        let scale = ctx.pixels_per_point();
+        if scale != self.last_scale {
+            // Moved to a screen with other scaling: its taskbar may differ.
+            self.last_scale = scale;
+            self.fit_tries = 20;
+        }
+        if !self.hidden && self.fit_tries > 0 {
+            self.fit_tries -= 1;
+            match os::fit_to_work_area(self.window) {
+                Some(true) => self.fit_tries = 0,
+                Some(false) => {}
+                None => self.fit_to_monitor(ctx),
+            }
+        }
+    }
+
+    /// Where the system can't say where the taskbar is: keep the window
+    /// shorter than the screen, leaving room for panels and the title bar.
+    fn fit_to_monitor(&mut self, ctx: &egui::Context) {
+        let (monitor, inner) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().inner_rect));
+        let (Some(m), Some(r)) = (monitor, inner) else { return };
+        if m.y < 100.0 {
+            return;
+        }
+        self.fit_tries = 0;
+        let max_h = (m.y - 110.0).max(560.0);
+        let max_w = (m.x - 40.0).max(400.0);
+        if r.height() > max_h + 1.0 || r.width() > max_w + 1.0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(r.width().min(max_w), r.height().min(max_h))));
+        }
     }
 
     fn toast(&mut self, msg: impl Into<String>, error: bool) {
@@ -295,9 +433,15 @@ impl App {
                             // Release capture sinks and the port before handing over.
                             self.engine.stop_sending();
                             self.engine.stop_receiving();
+                            // The new copy puts its own icon in the tray.
+                            self.tray = None;
                             if let Err(e) = updater::install_and_restart(&file) {
                                 *self.update.lock() = UpdateStatus::Failed(format!("{e:#}"));
                                 self.start_receiving();
+                                self.tray = os::Tray::new();
+                                if let (Some(t), Some(w)) = (&self.tray, &self.waker) {
+                                    t.connect(w.clone());
+                                }
                             }
                         }
                     });
@@ -342,6 +486,13 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        self.window_events(ctx);
+        if self.hidden {
+            // In the tray: nothing to draw, just keep checking for updates
+            // and tray clicks (Linux keeps calling this while hidden).
+            ctx.request_repaint_after(Duration::from_secs(1));
+            return;
+        }
         let panel = egui::Frame::new().fill(BG).inner_margin(egui::Margin { left: 16, right: 16, top: 14, bottom: 10 });
         egui::TopBottomPanel::top("top").frame(panel).show_separator_line(false).show(ctx, |ui| {
             let w = ui.available_width().min(620.0);

@@ -164,6 +164,7 @@ class MainActivity : ComponentActivity(), Host {
                 if (applied != h) {
                     // A new engine (first start or after a restart): give it the saved choices.
                     Native.setVolume(h, model.effectiveVolume)
+                    for ((ip, v) in model.sourceVolumes) Native.setSourceVolume(h, ip, v)
                     Native.setMode(h, model.latencyMode)
                     lastSend = "-"
                     lastForward = "-"
@@ -252,6 +253,10 @@ class MainActivity : ComponentActivity(), Host {
 
     override fun setVolume(volume: Float) {
         handle.takeIf { it != 0L }?.let { Native.setVolume(it, volume) }
+    }
+
+    override fun setSourceVolume(ip: String, volume: Float) {
+        handle.takeIf { it != 0L }?.let { Native.setSourceVolume(it, ip, volume) }
     }
 
     override fun setMode(id: String) {
