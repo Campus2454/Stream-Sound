@@ -367,6 +367,21 @@ fun delayText(ms: Double): String {
 /** The widest text the delay pill is sized for. */
 private const val DELAY_TEXT_WIDEST = "888 ms"
 
+/** The delay pill turns amber from here: a lag you notice against a picture. */
+private const val DELAY_AMBER_MS = 150
+/** And red from here, seconds included: more than any mode's buffer holds when things work. */
+private const val DELAY_RED_MS = 500
+
+/** The delay pill's colour, by the number it shows. A stutter in the last 10 s turns a green pill amber. */
+fun delayColor(ms: Double, stutter: Boolean): Color {
+    val v = if (ms.isFinite()) ms.coerceAtLeast(0.0).roundToInt() else 0
+    return when {
+        v >= DELAY_RED_MS -> C.Error
+        v >= DELAY_AMBER_MS || stutter -> C.Amber
+        else -> C.Green
+    }
+}
+
 /** The delay in a pill of fixed width, so it and the speaker beside it don't move as the number changes. */
 @Composable
 fun DelayPill(ms: Double, color: Color) {

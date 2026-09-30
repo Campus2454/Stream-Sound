@@ -170,8 +170,8 @@ fn stream_row(ui: &mut Ui, s: &StreamStats, delay: f64, stutter: bool, open: boo
     p.circle_filled(c, 18.0, OUTLINE);
     p.circle_stroke(c, 18.0, Stroke::new(2.5, GREEN.gamma_multiply(0.25 + 0.75 * s.level.clamp(0.0, 1.0))));
     p.text(c, Align2::CENTER_CENTER, t(initial(&s.name)), font(16.0), Color32::WHITE);
-    // Just the delay; its colour says whether it stuttered lately.
-    let color = if stutter { AMBER } else { GREEN };
+    // Just the delay, coloured by how long it is and by recent stutters.
+    let color = delay_color(delay, stutter);
     // A fixed width, so the pill and the speaker beside it don't move as the
     // number changes.
     let pill_g = p.layout_no_wrap(delay_text(delay), font(13.0), color);

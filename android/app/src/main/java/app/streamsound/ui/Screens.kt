@@ -502,8 +502,8 @@ private fun VolumeRow(m: UiModel, host: Host) {
 @Composable
 private fun StreamRow(m: UiModel, host: Host, s: StreamInfo, outMs: Double, stutter: Boolean, open: Boolean, onClick: () -> Unit) {
     val total = s.captureMs + s.bufferMs + outMs
-    // Just the delay; its colour says whether it stuttered lately.
-    val color = if (stutter) C.Amber else C.Green
+    // Just the delay, coloured by how long it is and by recent stutters.
+    val color = delayColor(total, stutter)
     val ip = s.from.substringBefore(':')
     val vol = m.sourceVolume(ip)
     val volumeOpen = m.volumeOpen == s.id
