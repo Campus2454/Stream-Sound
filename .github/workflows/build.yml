@@ -100,10 +100,26 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force out/StreamSound | Out-Null
           Copy-Item target/release/stream-sound.exe out/StreamSound/StreamSound.exe
+      # The setup people download and the updater runs (desktop/installer).
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $nsis = "${env:ProgramFiles(x86)}\NSIS"
+          if (-not (Test-Path "$nsis\makensis.exe")) { choco install nsis -y --no-progress }
+          New-Item -ItemType Directory -Force out/setup | Out-Null
+          & "$nsis\makensis.exe" -WX -V3 "-DVERSION=$env:SSND_VERSION" `
+            "-DEXE=$PWD\out\StreamSound\StreamSound.exe" `
+            "-DOUTFILE=$PWD\out\setup\StreamSound-windows-x64-setup.exe" `
+            desktop\installer\windows.nsi
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: StreamSound-windows-x64
           path: out/StreamSound
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StreamSound-windows-x64-setup
+          path: out/setup/StreamSound-windows-x64-setup.exe
 
   android:
     needs: version
@@ -164,6 +180,9 @@ jobs:
         run: |
           mkdir -p release
           cp artifacts/StreamSound-linux-x64/StreamSound-linux-x86_64 release/
+          cp artifacts/StreamSound-windows-x64-setup/StreamSound-windows-x64-setup.exe release/
+          # The program on its own, which versions before the installer
+          # download to update themselves.
           cp artifacts/StreamSound-windows-x64/StreamSound.exe release/StreamSound-windows-x64.exe
           (cd artifacts/StreamSound-windows-x64 && zip -9 ../../release/StreamSound-windows-x64.zip StreamSound.exe)
           cp artifacts/StreamSound-android/StreamSound.apk release/
@@ -179,8 +198,8 @@ jobs:
           body: |
             ${{ needs.version.outputs.channel == 'official' && 'Official release (เวอร์ชันทางการ).' || 'Beta (เวอร์ชันเบต้า): the newest changes, tested less than an official release.' }}
 
-            Windows: StreamSound-windows-x64.zip (or the .exe)
-            Linux: StreamSound-linux-x86_64 (chmod +x, then run)
+            Windows: StreamSound-windows-x64-setup.exe (installer; the .zip holds the program on its own)
+            Linux: StreamSound-linux-x86_64 (chmod +x, then run it to install)
             Android: StreamSound.apk
 
             Apps that are already installed update themselves from here. Every earlier version stays on the Releases page.

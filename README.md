@@ -11,7 +11,7 @@ on `main` is published as a release that installed apps update from. See
 
 | Platform | Status |
 |---|---|
-| Windows 10/11 | Built and unit-tested on GitHub's Windows runner; not yet tried on a real PC |
+| Windows 10/11 | Built on GitHub's Windows runner and used on Windows 11; installer tested in Wine |
 | Linux (PulseAudio or PipeWire) | Built and tested end to end; one standalone file |
 | Android 10+ | Built on GitHub; not yet tried on a real phone |
 | iOS | Not built yet (planned: cloud Mac build, sideloaded from Windows) |
@@ -25,7 +25,7 @@ on `main` is published as a release that installed apps update from. See
 
 | เครื่อง | ไฟล์ |
 |---|---|
-| Windows | `StreamSound-windows-x64.zip` |
+| Windows | `StreamSound-windows-x64-setup.exe` |
 | Linux | `StreamSound-linux-x86_64` |
 | Android | `StreamSound.apk` |
 
@@ -36,12 +36,21 @@ on `main` is published as a release that installed apps update from. See
 
 ### Windows 10/11
 
-1. คลิกขวาไฟล์ zip > **Extract All** ไปไว้ในโฟลเดอร์ของคุณเอง เช่น `Documents\StreamSound`
-   (ต้องแตกไฟล์ก่อน อย่าเปิดจากใน zip และอย่าไว้ใน `Program Files` ไม่อย่างนั้นแอปจะอัปเดตตัวเองไม่ได้)
-2. เปิด `StreamSound.exe`
-3. ถ้าขึ้น "Windows protected your PC" ให้กด **More info** > **Run anyway**
+1. เปิด `StreamSound-windows-x64-setup.exe`
+   - ถ้าขึ้น "Windows protected your PC" ให้กด **More info** > **Run anyway**
+   - Windows จะถามสิทธิ์ผู้ดูแล ให้กด **Yes** (ติดตั้งลง `Program Files`)
+2. เลือกโฟลเดอร์ (ค่าเริ่มต้น `C:\Program Files\Stream Sound`) และทางลัดที่ต้องการ
+   (บนเดสก์ท็อป / ในเมนู Start) แล้วกด **ติดตั้ง**
+3. หน้าสุดท้ายติ๊ก **เปิด Stream Sound** ไว้ แล้วกด **เสร็จสิ้น**
 4. ถ้า Windows Firewall ถาม ให้ติ๊ก **Private networks** แล้วกด **Allow**
    (ถ้าไม่อนุญาต เครื่องอื่นจะส่งเสียงมาเครื่องนี้ไม่ได้)
+
+ถอนการติดตั้ง: **การตั้งค่า > แอป > Stream Sound > ถอนการติดตั้ง** หรือในแอปที่หน้า
+**ตั้งค่า** > **ถอนการติดตั้ง…** เลือกได้ว่าจะลบการตั้งค่าด้วยหรือไม่
+
+เคยใช้ `StreamSound.exe` แบบไม่ติดตั้ง (v1.0.4 หรือก่อนหน้า): ติดตั้งด้วยไฟล์ setup ด้านบนครั้งเดียว
+แล้วลบไฟล์ `.exe` เดิมทิ้งได้ (v1.0.1–v1.0.4 อัปเดตตัวเองไม่ได้เพราะแอปค้างตอนปิด ซึ่งแก้แล้ว)
+ถ้าต้องการใช้แบบไม่ติดตั้ง ไฟล์ `StreamSound-windows-x64.zip` ยังมีให้ในทุก release
 
 ### Android 10 ขึ้นไป
 
@@ -66,12 +75,16 @@ on `main` is published as a release that installed apps update from. See
 และเซิร์ฟเวอร์เสียงที่เดสก์ท็อปมีอยู่แล้ว (PulseAudio หรือ PipeWire)
 ใช้ได้กับ Arch และดิสโทรอื่นที่ใหม่กว่า Ubuntu 22.04
 
-1. ติดตั้งไว้ในโฟลเดอร์ของคุณเอง แล้วเปิด:
+1. ทำให้ไฟล์เปิดได้ แล้วเปิด (หรือคลิกขวาไฟล์ > Properties > อนุญาตให้รันเป็นโปรแกรม แล้วดับเบิลคลิก):
    ```
-   install -Dm755 ~/Downloads/StreamSound-linux-x86_64 ~/.local/bin/stream-sound
-   ~/.local/bin/stream-sound
+   chmod +x ~/Downloads/StreamSound-linux-x86_64
+   ~/Downloads/StreamSound-linux-x86_64
    ```
-   (ไว้ที่ไหนก็ได้ที่คุณเขียนไฟล์ได้ เพื่อให้แอปอัปเดตตัวเองได้ อย่าไว้ใน `/usr/bin`)
+   ไฟล์นี้ติดตั้งตัวเอง: เลือกโฟลเดอร์ (ค่าเริ่มต้น `~/.local/share/stream-sound`)
+   ทางลัดบนเดสก์ท็อป และเมนูแอป แล้วกด **ติดตั้ง** ไม่ต้องใช้ sudo
+   (กด **ใช้เลยโดยไม่ติดตั้ง** ถ้าต้องการเปิดจากไฟล์นี้ตรง ๆ)
+   ถอนการติดตั้ง: คลิกขวาไอคอนในเมนูแอป > **ถอนการติดตั้ง Stream Sound**
+   หรือในแอปที่หน้า **ตั้งค่า** > **ถอนการติดตั้ง…** (หรือ `stream-sound --uninstall`)
 2. ถ้าขึ้นว่า "ไม่พบ PulseAudio/PipeWire (libpulse)": เครื่องที่ใช้ PipeWire ต้องมี
    `pipewire-pulse` ด้วย: `sudo pacman -S --needed libpulse pipewire-pulse`
    (ตรวจได้ด้วย `pactl info` ถ้าขึ้น `Server Name` แสดงว่าใช้ได้)
@@ -94,6 +107,8 @@ on `main` is published as a release that installed apps update from. See
 
 - **Windows / Linux:** แอปเช็กตอนเปิดและทุก 5 นาทีขณะเปิดแอปอยู่ ถ้ามีเวอร์ชันใหม่จะดาวน์โหลดเก็บไว้เงียบ ๆ
   แล้วขึ้นแถบสีแดง "มีเวอร์ชันใหม่" กด **อัปเดตเลย** เมื่อสะดวก (แอปไม่รีสตาร์ตเองกลางการสตรีม)
+  แอปจะปิดทันที แล้วตัวติดตั้งจะอัปเดตโดยขึ้นหน้าต่างความคืบหน้าเล็ก ๆ และเปิดเวอร์ชันใหม่ให้เอง
+  (Windows จะถามสิทธิ์ผู้ดูแลทุกครั้ง ให้กด **Yes**)
   เลขเวอร์ชันปัจจุบันและปุ่ม **ตรวจสอบอัปเดต** อยู่ที่หน้า **ตั้งค่า**
 - **Android:** แอปเช็กและดาวน์โหลดตอนเปิดและทุก 5 นาทีขณะเปิดแอปอยู่ แล้วขึ้นแถบ **อัปเดตเลย**
   ครั้งแรก Android จะพาไปหน้า "ติดตั้งแอปที่ไม่รู้จัก" ให้เปิดอนุญาตให้ Stream Sound
@@ -244,6 +259,20 @@ stream-sound update      # download and install the newest release
   betas off the tag `releases/latest` redirects to. They then download
   `releases/download/<tag>/<file>`; a 404 there means the release's files are
   still uploading, and the next check tries again.
+- **Installers:** Windows has an NSIS setup (`desktop/installer/windows.nsi`,
+  built in CI): per-machine install, shortcuts, an entry in Settings > Apps
+  and `uninstall.exe`. The updater downloads the new setup to
+  `%TEMP%\StreamSound` and runs it with `/UPDATE /D=<folder>` (progress only,
+  then it reopens the app); a copy that isn't installed runs the full setup
+  with `/FROM="<exe>"`, which removes that file once installed. On Linux the
+  single file installs itself (`desktop/src/setup/linux.rs`, window in
+  `gui/setup.rs`): the program, a menu entry with an Uninstall action, an
+  optional desktop shortcut and the icon, recorded in
+  `~/.config/StreamSound/install.txt`; updates run the new file with
+  `--update <installed program>`. Before replacing files, both ask the
+  running app to quit over its single-instance port (`SSND quit`; the
+  program's `--quit` flag). Releases still carry `StreamSound-windows-x64.exe`
+  for versions before the installer, which download that name.
 
 ## Tested here (Linux, 2026-09-29)
 

@@ -63,8 +63,8 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
                 crate::updater::Check::Newer(rel) => {
                     println!("downloading {} ...", rel.tag);
                     let file = crate::updater::download(&rel, |_| {})?;
-                    let exe = crate::updater::install(&file)?;
-                    println!("updated {} to version {}", exe.display(), rel.version);
+                    crate::updater::start_install(&file)?;
+                    println!("the installer is updating to version {}", rel.version);
                 }
             }
             Ok(())

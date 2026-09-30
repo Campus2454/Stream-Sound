@@ -3,10 +3,12 @@
 //! Releases are tagged `vX.Y` (official) or `vX.Y.Z` (beta, the Z-th change
 //! on main after vX.Y); see .github/version.sh. CI bakes the version into the
 //! app (`SSND_VERSION`). The app picks the newest release it may take (betas
-//! only if the user wants them), downloads its file next to itself, and on
-//! request swaps it in and restarts.
+//! only if the user wants them) and downloads its installer to a temporary
+//! folder. On request it starts that installer in update mode, which shows
+//! its progress, replaces this copy once it has closed and starts the new
+//! one (see setup).
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
@@ -19,8 +21,11 @@ use std::time::Duration;
 /// Audio-Streaming still reach it through GitHub's rename redirect.
 pub const REPO: &str = "Campus2454/Stream-Sound";
 
+/// What an update downloads: the Windows installer, or the Linux file,
+/// which is its own installer. (Copies from before the installers took
+/// StreamSound-windows-x64.exe, which releases still carry.)
 #[cfg(windows)]
-const ASSET: &str = "StreamSound-windows-x64.exe";
+const ASSET: &str = "StreamSound-windows-x64-setup.exe";
 #[cfg(not(windows))]
 const ASSET: &str = "StreamSound-linux-x86_64";
 
@@ -188,23 +193,34 @@ impl fmt::Display for NotUploadedYet {
 
 impl std::error::Error for NotUploadedYet {}
 
-fn exe_path() -> anyhow::Result<PathBuf> {
-    let p = std::env::current_exe()?;
-    Ok(fs::canonicalize(&p).unwrap_or(p))
+/// Where downloads wait to be installed: the system's temporary folder on
+/// Windows, ~/.cache on Linux.
+fn download_dir() -> PathBuf {
+    #[cfg(not(windows))]
+    if let Some(c) = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+    {
+        return c.join("stream-sound");
+    }
+    std::env::temp_dir().join("StreamSound")
 }
 
-/// Download the release next to the running program. `progress` gets 0..=100.
+/// Download the release's installer. `progress` gets 0..=100.
 pub fn download(release: &Release, progress: impl Fn(u32)) -> anyhow::Result<PathBuf> {
-    let exe = exe_path()?;
-    let dir = exe.parent().ok_or_else(|| anyhow!("no folder for {}", exe.display()))?;
-    let tmp = dir.join(format!("{}.update", exe.file_name().and_then(|n| n.to_str()).unwrap_or("stream-sound")));
+    let dir = download_dir();
+    fs::create_dir_all(&dir).with_context(|| format!("cannot write to {}", dir.display()))?;
+    let name = ASSET.replacen("StreamSound-", &format!("StreamSound-{}-", release.tag), 1);
+    let file = dir.join(&name);
+    let tmp = dir.join(format!("{name}.part"));
     let resp = match agent().get(&release.url).call() {
         Ok(r) => r,
         Err(ureq::Error::Status(404, _)) => return Err(NotUploadedYet.into()),
         Err(e) => return Err(e.into()),
     };
     let total: u64 = resp.header("Content-Length").and_then(|s| s.parse().ok()).unwrap_or(0);
-    let mut file = fs::File::create(&tmp).with_context(|| format!("cannot write to {}", dir.display()))?;
+    let mut out = fs::File::create(&tmp).with_context(|| format!("cannot write to {}", dir.display()))?;
     let mut reader = resp.into_reader();
     let mut buf = vec![0u8; 64 * 1024];
     let mut done: u64 = 0;
@@ -213,14 +229,14 @@ pub fn download(release: &Release, progress: impl Fn(u32)) -> anyhow::Result<Pat
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n])?;
+        out.write_all(&buf[..n])?;
         done += n as u64;
         if total > 0 {
             progress((done * 100 / total) as u32);
         }
     }
-    file.flush()?;
-    drop(file);
+    out.flush()?;
+    drop(out);
     if (total > 0 && done != total) || done < 512 * 1024 {
         let _ = fs::remove_file(&tmp);
         bail!("download incomplete ({done} of {total} bytes)");
@@ -230,47 +246,59 @@ pub fn download(release: &Release, progress: impl Fn(u32)) -> anyhow::Result<Pat
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))?;
     }
+    fs::rename(&tmp, &file)?;
     progress(100);
-    Ok(tmp)
+    Ok(file)
 }
 
-/// Swap the downloaded file in and start it. Only returns on failure.
-pub fn install_and_restart(new_file: &Path) -> anyhow::Result<()> {
-    let exe = install(new_file)?;
-    // Tell the new copy to wait for this one to close rather than wake it.
-    std::process::Command::new(&exe).arg(crate::os::AFTER_UPDATE_FLAG).spawn()?;
-    std::process::exit(0);
-}
-
-/// Replace the running program's file with `new_file`; returns its path.
-pub fn install(new_file: &Path) -> anyhow::Result<PathBuf> {
-    let exe = exe_path()?;
+/// Start the downloaded installer in update mode. On success this copy
+/// should close right away: the installer waits for it before replacing
+/// its files, then starts the new version.
+pub fn start_install(installer: &Path) -> anyhow::Result<()> {
     #[cfg(windows)]
     {
-        // A running exe can be renamed but not overwritten.
-        let old = old_path(&exe);
-        let _ = fs::remove_file(&old);
-        fs::rename(&exe, &old)?;
-        if let Err(e) = fs::rename(new_file, &exe) {
-            let _ = fs::rename(&old, &exe);
-            return Err(e.into());
+        // An installed copy is updated in place with only a progress
+        // window. A copy run from a downloaded file gets the full
+        // installer, which removes that file once the app is installed.
+        let exe = std::env::current_exe()?;
+        let params = match exe.parent() {
+            // `/D=` goes last and without quotes.
+            Some(dir) if crate::setup::installed() => format!("/UPDATE /D={}", dir.display()),
+            _ => format!("/FROM=\"{}\"", exe.display()),
+        };
+        crate::os::shell_open(installer, &params).map_err(anyhow::Error::from)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let me = crate::setup::linux::this_exe().ok_or_else(|| anyhow::anyhow!("can't find this program's file"))?;
+        let me = me.to_string_lossy().into_owned();
+        crate::setup::linux::launch(installer, &[crate::setup::UPDATE_FLAG, &me])
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = installer;
+        bail!("updates aren't supported here")
+    }
+}
+
+/// The user said no to the administrator prompt.
+pub fn cancelled(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<std::io::Error>().is_some_and(|e| e.raw_os_error() == Some(1223))
+}
+
+/// Remove what earlier updates left behind: downloads, and the files older
+/// versions swapped next to the program.
+pub fn cleanup() {
+    if let Ok(entries) = fs::read_dir(download_dir()) {
+        for e in entries.flatten() {
+            // An installer that is still finishing can't be removed yet;
+            // it goes next time.
+            let _ = fs::remove_file(e.path());
         }
     }
-    #[cfg(not(windows))]
-    fs::rename(new_file, &exe)?;
-    Ok(exe)
-}
-
-#[cfg(windows)]
-fn old_path(exe: &Path) -> PathBuf {
-    exe.with_extension("old.exe")
-}
-
-/// Remove what a previous update left behind.
-pub fn cleanup() {
-    if let Ok(exe) = exe_path() {
+    if let Some(exe) = std::env::current_exe().ok().map(|p| fs::canonicalize(&p).unwrap_or(p)) {
         #[cfg(windows)]
-        let _ = fs::remove_file(old_path(&exe));
+        let _ = fs::remove_file(exe.with_extension("old.exe"));
         if let (Some(dir), Some(name)) = (exe.parent(), exe.file_name().and_then(|n| n.to_str())) {
             let _ = fs::remove_file(dir.join(format!("{name}.update")));
         }

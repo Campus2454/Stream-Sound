@@ -169,9 +169,14 @@ pub fn segmented(ui: &mut Ui, id: &str, labels: &[String], selected: usize, enab
 }
 
 #[derive(Clone, Copy, PartialEq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum BigKind {
     Start,
     Stop,
+    /// Red gradient, text only (the installer's main button).
+    Primary,
+    /// Dark red outline, text only (uninstall).
+    Danger,
 }
 
 /// The full-width call to action in a hero card.
@@ -179,11 +184,11 @@ pub fn big_button(ui: &mut Ui, g: &Gradients, text: &str, kind: BigKind) -> Resp
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::click());
     let hover = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.12);
     match kind {
-        BigKind::Start => {
+        BigKind::Start | BigKind::Primary => {
             let tint = mix(Color32::from_gray(235), Color32::WHITE, hover);
             gradient_rect(ui, rect, 14.0, &g.horizontal, Gradients::UV_H, tint);
         }
-        BigKind::Stop => {
+        BigKind::Stop | BigKind::Danger => {
             ui.painter().rect(
                 rect,
                 radius(14.0),
@@ -194,6 +199,10 @@ pub fn big_button(ui: &mut Ui, g: &Gradients, text: &str, kind: BigKind) -> Resp
         }
     }
     let galley = ui.painter().layout_no_wrap(t(text), font(17.0), Color32::WHITE);
+    if matches!(kind, BigKind::Primary | BigKind::Danger) {
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
+        return resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
     let icon_w = 16.0;
     let total = icon_w + 10.0 + galley.size().x;
     let x0 = rect.center().x - total / 2.0;
@@ -212,9 +221,22 @@ pub fn big_button(ui: &mut Ui, g: &Gradients, text: &str, kind: BigKind) -> Resp
         BigKind::Stop => {
             p.rect_filled(icon.shrink(1.5), radius(3.0), Color32::WHITE);
         }
+        BigKind::Primary | BigKind::Danger => {}
     }
     p.galley(pos2(x0 + icon_w + 10.0, rect.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A thin bar filling left to right with the red gradient (0..1).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn progress_bar(ui: &mut Ui, g: &Gradients, value: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), Sense::hover());
+    ui.painter().rect_filled(rect, radius(4.0), SURFACE2);
+    let v = ui.ctx().animate_value_with_time(ui.id().with("progress"), value.clamp(0.0, 1.0), 0.25);
+    if v > 0.0 {
+        let fill = Rect::from_min_size(rect.min, vec2((rect.width() * v).max(8.0), rect.height()));
+        gradient_rect(ui, fill, 4.0, &g.horizontal, Gradients::UV_H, Color32::WHITE);
+    }
 }
 
 /// The letter to show in an avatar: the first letter or digit, skipping Thai

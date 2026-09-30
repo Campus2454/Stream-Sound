@@ -4,6 +4,8 @@
 mod receive;
 mod send;
 mod settings_tab;
+#[cfg(target_os = "linux")]
+pub mod setup;
 mod theme;
 mod widgets;
 
@@ -182,7 +184,8 @@ impl App {
         }
         app.waker = Some(waker.clone());
         // Opening the app again brings this window back instead.
-        claim.serve(move || waker.show());
+        let quitter = waker.clone();
+        claim.serve(move || waker.show(), move || quitter.quit());
         if start_hidden && app.in_tray() {
             os::hide_window(&cc.egui_ctx);
             app.hidden = true;
@@ -216,11 +219,25 @@ impl App {
         }
     }
 
+    /// Close the app for good (Exit, an update, the uninstaller).
+    fn quit_now(&mut self, ctx: &egui::Context) {
+        self.quitting = true;
+        os::hide_now(Some(ctx), self.window);
+        // Windows sends no frames to a hidden window, so eframe would never
+        // act on Close; the settings are saved already.
+        #[cfg(windows)]
+        {
+            self.save();
+            os::exit_now();
+        }
+        #[cfg(not(windows))]
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     /// Close button, tray menu and second copies of the app.
     fn window_events(&mut self, ctx: &egui::Context) {
         if self.requests.take_quit() {
-            self.quitting = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.quit_now(ctx);
         }
         if self.requests.take_show() {
             os::show_window(ctx);
@@ -229,11 +246,16 @@ impl App {
                 self.fit_tries = 20;
             }
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && self.in_tray() {
-            // Keep running (and receiving) in the tray.
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            os::hide_window(ctx);
-            self.hidden = true;
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
+            if self.in_tray() {
+                // Keep running (and receiving) in the tray.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                os::hide_window(ctx);
+                self.hidden = true;
+            } else {
+                self.quitting = true;
+                os::hide_now(Some(ctx), self.window);
+            }
         }
         let scale = ctx.pixels_per_point();
         if scale != self.last_scale {
@@ -430,18 +452,12 @@ impl App {
                             .fill(Color32::WHITE)
                             .corner_radius(10);
                         if ui.add(b).clicked() {
-                            // Release capture sinks and the port before handing over.
-                            self.engine.stop_sending();
-                            self.engine.stop_receiving();
-                            // The new copy puts its own icon in the tray.
-                            self.tray = None;
-                            if let Err(e) = updater::install_and_restart(&file) {
-                                *self.update.lock() = UpdateStatus::Failed(format!("{e:#}"));
-                                self.start_receiving();
-                                self.tray = os::Tray::new();
-                                if let (Some(t), Some(w)) = (&self.tray, &self.waker) {
-                                    t.connect(w.clone());
-                                }
+                            match updater::start_install(&file) {
+                                // The installer shows its progress, waits for
+                                // this copy to close, then starts the new one.
+                                Ok(()) => self.quit_now(ui.ctx()),
+                                Err(e) if updater::cancelled(&e) => self.toast(t("ยกเลิกการอัปเดตแล้ว"), false),
+                                Err(e) => *self.update.lock() = UpdateStatus::Failed(format!("{e:#}")),
                             }
                         }
                     });
@@ -484,6 +500,12 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // However the window was closed, take it off the screen before the
+        // sound engine and tray icon are shut down.
+        os::hide_now(None, self.window);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
         self.window_events(ctx);
