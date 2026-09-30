@@ -87,9 +87,28 @@ final class VizAnimator: ObservableObject {
 
 /// The volume tube: speaker (mute) + pill with a knob + percentage.
 /// The live level fills the tube up to the knob.
+/// The tube's first 75 % of length is 0–100 % volume, the last 25 % is
+/// 101–200 % (a boost), so everyday levels get most of the travel.
+enum VolumeCurve {
+    static let max = 2.0
+    static let unityPosition = 0.75
+
+    static func position(_ v: Double) -> Double {
+        let v = v.clamped(0, max)
+        return v <= 1 ? v * unityPosition : unityPosition + (v - 1) / (max - 1) * (1 - unityPosition)
+    }
+
+    static func volume(_ p: Double) -> Double {
+        let p = p.clamped(0, 1)
+        if abs(p - unityPosition) < 0.02 { return 1 } // snap to 100 %
+        let v = p <= unityPosition ? p / unityPosition : 1 + (p - unityPosition) / (1 - unityPosition) * (max - 1)
+        return (v * 100).rounded() / 100
+    }
+}
+
 struct VolumeTube: View {
     @EnvironmentObject var model: AppModel
-    private let maxVol = 1.5
+    private let maxVol = VolumeCurve.max
 
     var body: some View {
         HStack(spacing: 12) {
@@ -109,7 +128,7 @@ struct VolumeTube: View {
                 let w = geo.size.width
                 let knobD: CGFloat = 22
                 let track = w - knobD
-                let pos = CGFloat(model.volume / maxVol)
+                let pos = CGFloat(VolumeCurve.position(model.volume))
                 let knobX = knobD / 2 + track * pos
                 let fill = model.muted ? 0 : CGFloat(model.receiveLevel) * knobX
                 ZStack(alignment: .leading) {
@@ -121,7 +140,7 @@ struct VolumeTube: View {
                     // 100 % mark.
                     Rectangle().fill(Theme.text3)
                         .frame(width: 2, height: 10)
-                        .offset(x: knobD / 2 + track * CGFloat(1 / maxVol) - 1)
+                        .offset(x: knobD / 2 + track * CGFloat(VolumeCurve.unityPosition) - 1)
                     Circle()
                         .fill(Color.white)
                         .overlay(Circle().stroke(Theme.red, lineWidth: 3))
@@ -134,10 +153,8 @@ struct VolumeTube: View {
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0).onChanged { g in
-                        var v = Double((g.location.x - knobD / 2) / max(track, 1)) * maxVol
-                        v = v.clamped(0, maxVol)
-                        if abs(v - 1) < 0.04 { v = 1 } // snap to 100 %
-                        model.volume = v
+                        let p = Double((g.location.x - knobD / 2) / max(track, 1))
+                        model.volume = VolumeCurve.volume(p)
                         if model.muted { model.muted = false }
                     }
                 )
