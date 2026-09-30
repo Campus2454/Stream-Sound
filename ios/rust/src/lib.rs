@@ -329,6 +329,17 @@ pub extern "C" fn ssnd_set_volume(h: *const SsndHandle, v: f32) {
     })
 }
 
+/// Volume for one sender, by its IP (`StreamStats::from`), 0..2.
+#[no_mangle]
+pub extern "C" fn ssnd_set_source_volume(h: *const SsndHandle, from: *const c_char, v: f32) {
+    let from = cstr(from);
+    guard((), || {
+        if let Some(x) = handle(h) {
+            x.engine.read().set_source_volume(&from, if v.is_finite() { v } else { 1.0 });
+        }
+    })
+}
+
 /// "game", "balanced" or "music".
 #[no_mangle]
 pub extern "C" fn ssnd_set_mode(h: *const SsndHandle, mode: *const c_char) {

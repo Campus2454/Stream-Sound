@@ -79,6 +79,8 @@ final class AppModel: ObservableObject {
     // Saved settings.
     @Published var volume: Double { didSet { d.set(volume, forKey: "volume"); applyVolume() } }
     @Published var muted: Bool { didSet { d.set(muted, forKey: "muted"); applyVolume() } }
+    /// Per-sender volume by IP, 0...2 (1 = as sent), remembered across launches.
+    @Published private(set) var sourceVolumes: [String: Double]
     @Published var mode: String { didSet { d.set(mode, forKey: "mode"); engine.setMode(mode); pushConfig(force: true) } }
     @Published var sendTargets: Set<String> { didSet { d.set(Array(sendTargets), forKey: "sendTargets"); applyTargets() } }
     @Published var forwardTargets: Set<String> { didSet { d.set(Array(forwardTargets), forKey: "forwardTargets"); applyForward() } }
@@ -105,6 +107,7 @@ final class AppModel: ObservableObject {
         audio = AudioIO(engine: engine)
         volume = d.object(forKey: "volume") as? Double ?? 1.0
         muted = d.bool(forKey: "muted")
+        sourceVolumes = d.dictionary(forKey: "sourceVolumes") as? [String: Double] ?? [:]
         self.mode = mode
         sendTargets = Set(d.stringArray(forKey: "sendTargets") ?? [])
         forwardTargets = Set(d.stringArray(forKey: "forwardTargets") ?? [])
@@ -118,6 +121,7 @@ final class AppModel: ObservableObject {
 
         engine.setManualPeers(manualIPs)
         applyVolume()
+        for (ip, v) in sourceVolumes { engine.setSourceVolume(ip, Float(v)) }
         applyForward()
         audio.onProblem = { [weak self] msg in self?.show(msg) }
         if autoReceive { setReceiving(true) }
@@ -219,6 +223,15 @@ final class AppModel: ObservableObject {
 
     private func applyVolume() {
         engine.setVolume(muted ? 0 : Float(volume))
+    }
+
+    func sourceVolume(_ ip: String) -> Double { sourceVolumes[ip] ?? 1 }
+
+    func setSourceVolume(_ ip: String, _ v: Double) {
+        let v = v.clamped(0, VolumeCurve.max)
+        if v == 1 { sourceVolumes[ip] = nil } else { sourceVolumes[ip] = v }
+        d.set(sourceVolumes, forKey: "sourceVolumes")
+        engine.setSourceVolume(ip, Float(v))
     }
 
     func recentlyStuttered(_ s: StreamInfo) -> Bool {

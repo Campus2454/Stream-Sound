@@ -31,6 +31,8 @@ final class Ssnd {
     func setForward(_ dests: [String]) { ssnd_set_forward(h, dests.joined(separator: ",")) }
     func setPlayLocal(_ on: Bool) { ssnd_set_play_local(h, on) }
     func setVolume(_ v: Float) { ssnd_set_volume(h, v) }
+    /// Volume for one sender (by IP), 0...2, on top of setVolume.
+    func setSourceVolume(_ ip: String, _ v: Float) { ssnd_set_source_volume(h, ip, v) }
     func setMode(_ m: String) { ssnd_set_mode(h, m) }
     func setName(_ n: String) { ssnd_set_name(h, n) }
     func setManualPeers(_ ips: [String]) { ssnd_set_manual_peers(h, ips.joined(separator: ",")) }

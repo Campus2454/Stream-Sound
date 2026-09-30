@@ -87,10 +87,27 @@ final class VizAnimator: ObservableObject {
 
 /// The volume tube: speaker (mute) + pill with a knob + percentage.
 /// The live level fills the tube up to the knob.
+/// The tube's first 75 % of length is 0–100 % volume, the last 25 % is
+/// 101–200 % (a boost), so everyday levels get most of the travel.
+enum VolumeCurve {
+    static let max = 2.0
+    static let unityPosition = 0.75
+
+    static func position(_ v: Double) -> Double {
+        let v = v.clamped(0, max)
+        return v <= 1 ? v * unityPosition : unityPosition + (v - 1) / (max - 1) * (1 - unityPosition)
+    }
+
+    static func volume(_ p: Double) -> Double {
+        let p = p.clamped(0, 1)
+        if abs(p - unityPosition) < 0.02 { return 1 } // snap to 100 %
+        let v = p <= unityPosition ? p / unityPosition : 1 + (p - unityPosition) / (1 - unityPosition) * (max - 1)
+        return (v * 100).rounded() / 100
+    }
+}
+
 struct VolumeTube: View {
     @EnvironmentObject var model: AppModel
-    private let maxVol = 1.5
-
     var body: some View {
         HStack(spacing: 12) {
             Button {
@@ -105,59 +122,69 @@ struct VolumeTube: View {
             .buttonStyle(PressStyle())
             .accessibilityLabel(model.muted ? "เปิดเสียง" : "ปิดเสียง")
 
-            GeometryReader { geo in
-                let w = geo.size.width
-                let knobD: CGFloat = 22
-                let track = w - knobD
-                let pos = CGFloat(model.volume / maxVol)
-                let knobX = knobD / 2 + track * pos
-                let fill = model.muted ? 0 : CGFloat(model.receiveLevel) * knobX
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.surface2)
-                    Capsule()
-                        .fill(LinearGradient(colors: [Theme.red, Theme.redHi], startPoint: .leading, endPoint: .trailing))
-                        .frame(width: max(0, fill))
-                        .animation(.linear(duration: 0.1), value: fill)
-                    // 100 % mark.
-                    Rectangle().fill(Theme.text3)
-                        .frame(width: 2, height: 10)
-                        .offset(x: knobD / 2 + track * CGFloat(1 / maxVol) - 1)
-                    Circle()
-                        .fill(Color.white)
-                        .overlay(Circle().stroke(Theme.red, lineWidth: 3))
-                        .frame(width: knobD, height: knobD)
-                        .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
-                        .offset(x: knobX - knobD / 2)
-                }
-                .frame(height: 28)
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0).onChanged { g in
-                        var v = Double((g.location.x - knobD / 2) / max(track, 1)) * maxVol
-                        v = v.clamped(0, maxVol)
-                        if abs(v - 1) < 0.04 { v = 1 } // snap to 100 %
-                        model.volume = v
-                        if model.muted { model.muted = false }
-                    }
-                )
-            }
+            Tube(value: Binding(get: { model.volume }, set: { v in
+                model.volume = v
+                if model.muted { model.muted = false }
+            }), level: model.muted ? 0 : model.receiveLevel)
             .frame(height: 36)
-            .accessibilityElement()
             .accessibilityLabel("ระดับเสียง")
-            .accessibilityValue("\(Int((model.volume * 100).rounded())) เปอร์เซ็นต์")
-            .accessibilityAdjustableAction { dir in
-                switch dir {
-                case .increment: model.volume = min(maxVol, model.volume + 0.05)
-                case .decrement: model.volume = max(0, model.volume - 0.05)
-                @unknown default: break
-                }
-            }
 
             Text("\(Int((model.volume * 100).rounded()))%")
                 .font(.system(size: 14, weight: .semibold).monospacedDigit())
                 .foregroundColor(model.muted ? Theme.text3 : Theme.text)
                 .frame(width: 48, alignment: .trailing)
+        }
+    }
+}
+
+/// The tube itself: track, live level fill, 100 % mark and knob. The level
+/// fills up to the knob (fill = level before volume × knob position).
+struct Tube: View {
+    @Binding var value: Double
+    var level: Double
+    var height: CGFloat = 30
+    var knobD: CGFloat = 22
+
+    var body: some View {
+        GeometryReader { geo in
+            let track = geo.size.width - knobD
+            let knobX = knobD / 2 + track * CGFloat(VolumeCurve.position(value))
+            let fill = CGFloat(level.clamped(0, 1)) * knobX
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.surface2)
+                Capsule()
+                    .fill(LinearGradient(colors: [Theme.red, Theme.redHi], startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(0, fill))
+                    .animation(.linear(duration: 0.1), value: fill)
+                // 100 % mark.
+                Rectangle().fill(Theme.text3)
+                    .frame(width: 2, height: height * 0.36)
+                    .offset(x: knobD / 2 + track * CGFloat(VolumeCurve.unityPosition) - 1)
+                Circle()
+                    .fill(Color.white)
+                    .overlay(Circle().stroke(Theme.red, lineWidth: 3))
+                    .frame(width: knobD, height: knobD)
+                    .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
+                    .offset(x: knobX - knobD / 2)
+            }
+            .frame(height: height)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0).onChanged { g in
+                    value = VolumeCurve.volume(Double((g.location.x - knobD / 2) / max(track, 1)))
+                }
+            )
+        }
+        .frame(height: 36)
+        .accessibilityElement()
+        .accessibilityValue("\(Int((value * 100).rounded())) เปอร์เซ็นต์")
+        .accessibilityAdjustableAction { dir in
+            switch dir {
+            case .increment: value = min(VolumeCurve.max, value + 0.05)
+            case .decrement: value = max(0, value - 0.05)
+            @unknown default: break
+            }
         }
     }
 }

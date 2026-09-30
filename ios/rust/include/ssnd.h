@@ -39,6 +39,9 @@ void ssnd_set_forward(const SsndHandle *h, const char *dests);
 void ssnd_set_play_local(const SsndHandle *h, bool on);
 // 0.0 ... 1.5
 void ssnd_set_volume(const SsndHandle *h, float v);
+// Volume for one sender, by its IP (StreamStats "from"), 0..2, 1 = as sent.
+// Multiplies on top of ssnd_set_volume; can be set before it starts sending.
+void ssnd_set_source_volume(const SsndHandle *h, const char *from, float v);
 void ssnd_set_mode(const SsndHandle *h, const char *mode);
 void ssnd_set_name(const SsndHandle *h, const char *name);
 void ssnd_set_manual_peers(const SsndHandle *h, const char *ips);
