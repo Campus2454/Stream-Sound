@@ -4,6 +4,7 @@ struct ReceiveView: View {
     @EnvironmentObject var model: AppModel
     @State private var expanded: UInt32?
     @State private var showForward = false
+    @State private var volumeOpen: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.gap) {
@@ -70,6 +71,7 @@ struct ReceiveView: View {
                         Text(s.from).font(.system(size: 13).monospacedDigit()).foregroundColor(Theme.text2)
                     }
                     Spacer(minLength: 8)
+                    speakerButton(s)
                     Text("\(Int(delay(s).rounded())) ms")
                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
                         .foregroundColor(warn ? Theme.amber : Theme.green)
@@ -79,6 +81,10 @@ struct ReceiveView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressStyle())
+            if volumeOpen == s.from {
+                sourceVolume(s)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
             if open {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(breakdown(s)).font(.system(size: 12).monospacedDigit()).foregroundColor(Theme.text2)
@@ -89,6 +95,37 @@ struct ReceiveView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Tap to show this sender's own volume tube under its row.
+    private func speakerButton(_ s: StreamInfo) -> some View {
+        let v = model.sourceVolume(s.from)
+        let on = volumeOpen == s.from
+        return Button {
+            withAnimation(.easeOut(duration: 0.2)) { volumeOpen = on ? nil : s.from }
+        } label: {
+            Image(systemName: v == 0 ? "speaker.slash.fill" : v < 0.6 ? "speaker.wave.1.fill" : "speaker.wave.3.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(on ? Theme.red : v == 1 ? Theme.text2 : Theme.text)
+                .frame(width: 32, height: 32)
+                .background(Theme.surface2, in: Circle())
+        }
+        .buttonStyle(PressStyle())
+        .accessibilityLabel("ระดับเสียงของ \(s.name)")
+    }
+
+    private func sourceVolume(_ s: StreamInfo) -> some View {
+        let v = model.sourceVolume(s.from)
+        return HStack(spacing: 10) {
+            Tube(value: Binding(get: { model.sourceVolume(s.from) }, set: { model.setSourceVolume(s.from, $0) }),
+                 level: Double(s.level), height: 22, knobD: 20)
+                .accessibilityLabel("ระดับเสียงของ \(s.name)")
+            Text("\(Int((v * 100).rounded()))%")
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .foregroundColor(Theme.text)
+                .frame(width: 44, alignment: .trailing)
+        }
+        .padding(.leading, 50)
     }
 
     private func breakdown(_ s: StreamInfo) -> String {
