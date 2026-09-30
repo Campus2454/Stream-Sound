@@ -59,7 +59,7 @@ struct ReceiveView: View {
 
     private func streamRow(_ s: StreamInfo) -> some View {
         let open = expanded == s.id
-        let warn = model.recentlyStuttered(s)
+        let tone = Self.delayColor(delay(s), stuttered: model.recentlyStuttered(s))
         return VStack(alignment: .leading, spacing: 8) {
             Button {
                 withAnimation(.easeOut(duration: 0.2)) { expanded = open ? nil : s.id }
@@ -72,11 +72,16 @@ struct ReceiveView: View {
                     }
                     Spacer(minLength: 8)
                     speakerButton(s)
-                    Text("\(Int(delay(s).rounded())) ms")
+                    // Sized by a hidden "888 ms" so the pill (and the speaker
+                    // beside it) never moves as the number changes.
+                    ZStack {
+                        Text("888 ms").hidden()
+                        Text(Self.delayText(delay(s))).lineLimit(1)
+                    }
                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                        .foregroundColor(warn ? Theme.amber : Theme.green)
+                        .foregroundColor(tone)
                         .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background((warn ? Theme.amber : Theme.green).opacity(0.14), in: Capsule())
+                        .background(tone.opacity(0.14), in: Capsule())
                 }
                 .contentShape(Rectangle())
             }
@@ -126,6 +131,25 @@ struct ReceiveView: View {
                 .frame(width: 44, alignment: .trailing)
         }
         .padding(.leading, 50)
+    }
+
+    /// Colour by the number on the pill (delay rounded to whole ms), never
+    /// by the unit, so nothing jumps when it switches from ms to s. Under
+    /// 150 ms green, 150-499 amber, 500+ (every value in seconds) red. A
+    /// recent stutter turns green amber, never changes amber or red.
+    static func delayColor(_ ms: Double, stuttered: Bool) -> Color {
+        let r = max(0, ms.rounded())
+        if r >= 500 { return Theme.error }
+        if r >= 150 || stuttered { return Theme.amber }
+        return Theme.green
+    }
+
+    /// "32 ms" under a second, "1.2 s" from 1000 ms, "123 s" from 99.95 s.
+    static func delayText(_ ms: Double) -> String {
+        let r = max(0, ms.rounded())
+        if r < 1000 { return "\(Int(r)) ms" }
+        let sec = r / 1000
+        return sec < 99.95 ? String(format: "%.1f s", sec) : "\(Int(sec.rounded())) s"
     }
 
     private func breakdown(_ s: StreamInfo) -> String {
