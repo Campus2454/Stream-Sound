@@ -72,12 +72,15 @@ struct ReceiveView: View {
                     }
                     Spacer(minLength: 8)
                     speakerButton(s)
-                    Text(Self.delayText(delay(s)))
+                    // Sized by a hidden "888 ms" so the pill (and the speaker
+                    // beside it) never moves as the number changes.
+                    ZStack {
+                        Text("888 ms").hidden()
+                        Text(Self.delayText(delay(s))).lineLimit(1)
+                    }
                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
                         .foregroundColor(warn ? Theme.amber : Theme.green)
-                        .lineLimit(1)
-                        .frame(width: 58) // fits "999 ms", so the pill never resizes
-                        .padding(.vertical, 5)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
                         .background((warn ? Theme.amber : Theme.green).opacity(0.14), in: Capsule())
                 }
                 .contentShape(Rectangle())
@@ -130,10 +133,12 @@ struct ReceiveView: View {
         .padding(.leading, 50)
     }
 
-    /// "32 ms" under a second, "1.2 s" from 1000 ms up.
+    /// "32 ms" under a second, "1.2 s" from 1000 ms, "123 s" from 99.95 s.
     static func delayText(_ ms: Double) -> String {
-        let r = ms.rounded()
-        return r < 1000 ? "\(Int(max(0, r))) ms" : String(format: "%.1f s", ms / 1000)
+        let r = max(0, ms.rounded())
+        if r < 1000 { return "\(Int(r)) ms" }
+        let sec = r / 1000
+        return sec < 99.95 ? String(format: "%.1f s", sec) : "\(Int(sec.rounded())) s"
     }
 
     private func breakdown(_ s: StreamInfo) -> String {
