@@ -331,6 +331,8 @@ fn update_card(app: &mut App, ui: &mut Ui) {
         )
         .changed();
         hint(ui, "แอปตรวจหาเวอร์ชันใหม่จาก GitHub ให้เองตอนเปิดและทุก 5 นาที");
+        ui.add_space(12.0);
+        install_row(app, ui);
     });
     if beta_changed {
         app.save();
@@ -347,6 +349,64 @@ fn update_card(app: &mut App, ui: &mut Ui) {
         app.last_update_check = Instant::now();
         *app.update.lock() = UpdateStatus::Idle;
         updater::check_and_download_in_background(app.update.clone(), app.s.beta);
+    }
+}
+
+/// Where the app is installed, with Uninstall; or Install for a copy run
+/// from a downloaded file.
+fn install_row(app: &mut App, ui: &mut Ui) {
+    let installed = crate::setup::installed();
+    let dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.display().to_string())).unwrap_or_default();
+    let (note, action) = if installed {
+        (format!("ติดตั้งอยู่ที่ {dir}"), "ถอนการติดตั้ง…")
+    } else if cfg!(windows) {
+        ("ยังไม่ได้ติดตั้งลงเครื่อง (เปิดจากไฟล์ที่ดาวน์โหลดมา)".to_string(), "ดาวน์โหลดตัวติดตั้ง")
+    } else {
+        ("ยังไม่ได้ติดตั้งลงเครื่อง (เปิดจากไฟล์ที่ดาวน์โหลดมา)".to_string(), "ติดตั้ง…")
+    };
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width() - 120.0);
+            hint(ui, &note);
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            clicked = link_button(ui, action).clicked();
+        });
+    });
+    if !clicked {
+        return;
+    }
+    if let Err(e) = open_installer(installed) {
+        if !updater::cancelled(&e) {
+            app.toast(t(format!("เปิดตัวติดตั้งไม่ได้: {e:#}")), true);
+        }
+    }
+}
+
+/// The uninstaller (which closes the app itself), or the installer.
+fn open_installer(installed: bool) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        if installed {
+            let exe = std::env::current_exe()?;
+            let dir = exe.parent().ok_or_else(|| anyhow::anyhow!("no folder"))?;
+            crate::os::shell_open(&dir.join(crate::setup::WINDOWS_UNINSTALLER), "")?;
+        } else {
+            crate::os::shell_open(std::path::Path::new(&format!("https://github.com/{}/releases", updater::REPO)), "")?;
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use crate::setup::{linux, INSTALL_FLAG, UNINSTALL_FLAG};
+        let me = linux::this_exe().ok_or_else(|| anyhow::anyhow!("can't find this program's file"))?;
+        linux::launch(&me, &[if installed { UNINSTALL_FLAG } else { INSTALL_FLAG }])
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = installed;
+        anyhow::bail!("not supported here")
     }
 }
 

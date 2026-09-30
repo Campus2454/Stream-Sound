@@ -4,7 +4,7 @@
 
 mod instance;
 #[cfg(target_os = "linux")]
-mod linux;
+pub(crate) mod linux;
 #[cfg(windows)]
 mod windows;
 
@@ -13,7 +13,9 @@ use linux as imp;
 #[cfg(windows)]
 use windows as imp;
 
-pub use instance::{claim, Claim};
+pub use instance::{ask_to_quit, claim, Claim};
+#[cfg(target_os = "linux")]
+pub use instance::running;
 
 use eframe::egui;
 use raw_window_handle::RawWindowHandle;
@@ -24,6 +26,8 @@ use std::sync::Arc;
 pub const MINIMIZED_FLAG: &str = "--minimized";
 /// Flag an update passes to the new copy, which waits for the old one to go.
 pub const AFTER_UPDATE_FLAG: &str = "--after-update";
+/// Closes the running copy; the installers use it before replacing files.
+pub const QUIT_FLAG: &str = "--quit";
 
 /// Asks from the tray menu or from a second copy of the app, picked up by
 /// the window on its next frame.
@@ -82,8 +86,7 @@ impl Waker {
         // frees the sound devices, so leave right away.
         #[cfg(windows)]
         if self.hwnd.is_some_and(|h| !imp::is_visible(h)) {
-            imp::remove_tray_icon();
-            std::process::exit(0);
+            exit_now();
         }
         self.req.quit.store(true, Ordering::Relaxed);
         self.ctx.request_repaint();
@@ -95,6 +98,14 @@ impl Waker {
             std::process::exit(0);
         });
     }
+}
+
+/// Windows: end the app at once, taking the tray icon away first. For a
+/// hidden window, which gets no more frames to close through eframe.
+#[cfg(windows)]
+pub fn exit_now() -> ! {
+    imp::remove_tray_icon();
+    std::process::exit(0)
 }
 
 /// The tray icon: click to bring the window back, right-click for a menu
@@ -142,6 +153,27 @@ pub fn can_hide_window() -> bool {
 
 pub fn hide_window(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+}
+
+/// Take the window off the screen at once when the app is about to close,
+/// so it doesn't stay there while the app shuts down its sound.
+pub fn hide_now(ctx: Option<&egui::Context>, window: Option<RawWindowHandle>) {
+    #[cfg(windows)]
+    if let Some(h) = window.and_then(imp::hwnd) {
+        imp::hide_native(h);
+    }
+    #[cfg(not(windows))]
+    let _ = window;
+    if let Some(ctx) = ctx {
+        hide_window(ctx);
+    }
+}
+
+/// Start the installer or uninstaller the way a double-click would (on
+/// Windows that brings up the administrator prompt it needs).
+#[cfg(windows)]
+pub fn shell_open(file: &std::path::Path, params: &str) -> std::io::Result<()> {
+    imp::shell_open(file, params)
 }
 
 pub fn show_window(ctx: &egui::Context) {

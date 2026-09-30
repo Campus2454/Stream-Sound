@@ -5,6 +5,7 @@ use super::Waker;
 use raw_window_handle::RawWindowHandle;
 use std::cell::RefCell;
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicIsize, Ordering};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
@@ -58,6 +59,34 @@ pub fn show_native(v: isize) {
     }
 }
 
+/// Hide the window right away, from any thread.
+pub fn hide_native(v: isize) {
+    unsafe {
+        ShowWindow(h(v), SW_HIDE);
+    }
+}
+
+/// Start a program as a double-click would, so Windows asks for permission
+/// when the program needs to run as administrator (the installer). Fails
+/// with error 1223 (`ERROR_CANCELLED`) if the user says no.
+pub fn shell_open(file: &std::path::Path, params: &str) -> std::io::Result<()> {
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW};
+    let verb = wide("open");
+    let file = wide(&file.to_string_lossy());
+    let params = wide(params);
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOASYNC;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = params.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Called by a second copy before it wakes the first, so the first may
 /// bring its window to the front (Windows only lets the app the user just
 /// started take focus).
@@ -74,8 +103,11 @@ struct State {
     icon: HICON,
     waker: Option<Waker>,
     taskbar_created: u32,
-    shown: bool,
 }
+
+/// The tray's window while its icon is showing, else 0. Shared so the icon
+/// can be removed from any thread (an installer asking the app to close).
+static SHOWN: AtomicIsize = AtomicIsize::new(0);
 
 thread_local! {
     // The tray's hidden window belongs to the UI thread, and so does this.
@@ -102,7 +134,6 @@ impl Tray {
                 icon: load_icon(),
                 waker: None,
                 taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
-                shown: false,
             };
             STATE.with(|s| *s.borrow_mut() = Some(state));
             add_icon();
@@ -119,61 +150,57 @@ impl Tray {
     }
 
     pub fn available(&self) -> bool {
-        STATE.with(|s| s.borrow().as_ref().is_some_and(|s| s.shown))
+        SHOWN.load(Ordering::Relaxed) != 0
     }
 }
 
 impl Drop for Tray {
     fn drop(&mut self) {
         remove_tray_icon();
-        STATE.with(|s| {
-            if let Some(st) = s.borrow_mut().take() {
-                unsafe {
-                    DestroyWindow(st.window);
-                    if !st.icon.is_null() {
-                        DestroyIcon(st.icon);
-                    }
-                }
+        // Take the state out first: destroying the window calls `wndproc`,
+        // which reads the state too.
+        let Some(st) = STATE.with(|s| s.borrow_mut().take()) else { return };
+        unsafe {
+            DestroyWindow(st.window);
+            if !st.icon.is_null() {
+                DestroyIcon(st.icon);
             }
-        });
+        }
     }
 }
 
-fn icon_data(st: &State) -> NOTIFYICONDATAW {
+fn icon_data(window: HWND) -> NOTIFYICONDATAW {
     let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = st.window;
+    nid.hWnd = window;
     nid.uID = 1;
     nid
 }
 
 fn add_icon() {
-    STATE.with(|s| {
-        let mut s = s.borrow_mut();
-        let Some(st) = s.as_mut() else { return };
-        let mut nid = icon_data(st);
-        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        nid.uCallbackMessage = WM_TRAY;
-        nid.hIcon = st.icon;
-        for (d, c) in nid.szTip.iter_mut().zip("Stream Sound".encode_utf16()) {
-            *d = c;
-        }
-        st.shown = unsafe { Shell_NotifyIconW(NIM_ADD, &nid) } != 0;
-    });
+    let Some((window, icon)) = STATE.with(|s| s.try_borrow().ok()?.as_ref().map(|st| (st.window, st.icon))) else {
+        return;
+    };
+    let mut nid = icon_data(window);
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAY;
+    nid.hIcon = icon;
+    for (d, c) in nid.szTip.iter_mut().zip("Stream Sound".encode_utf16()) {
+        *d = c;
+    }
+    if unsafe { Shell_NotifyIconW(NIM_ADD, &nid) } != 0 {
+        SHOWN.store(window as isize, Ordering::Relaxed);
+    }
 }
 
 /// Take the icon out of the notification area (it would otherwise linger
-/// until the mouse passes over it).
+/// until the mouse passes over it). Safe from any thread.
 pub fn remove_tray_icon() {
-    STATE.with(|s| {
-        let mut s = s.borrow_mut();
-        let Some(st) = s.as_mut() else { return };
-        if st.shown {
-            let nid = icon_data(st);
-            unsafe { Shell_NotifyIconW(NIM_DELETE, &nid) };
-            st.shown = false;
-        }
-    });
+    let window = SHOWN.swap(0, Ordering::Relaxed);
+    if window != 0 {
+        let nid = icon_data(window as HWND);
+        unsafe { Shell_NotifyIconW(NIM_DELETE, &nid) };
+    }
 }
 
 /// The icon built into the .exe (build.rs), or the PNG if it is missing.
@@ -193,8 +220,12 @@ fn load_icon() -> HICON {
     }
 }
 
+// `wndproc` must never panic: a panic there ends the process on the spot,
+// leaving the window frozen on screen while Windows reports the crash. So
+// it only ever tries to read the state.
+
 fn waker() -> Option<Waker> {
-    STATE.with(|s| s.borrow().as_ref().and_then(|s| s.waker.clone()))
+    STATE.with(|s| s.try_borrow().ok()?.as_ref()?.waker.clone())
 }
 
 fn menu(window: HWND) {
@@ -240,7 +271,9 @@ unsafe extern "system" fn wndproc(window: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         }
         return 0;
     }
-    let restarted = STATE.with(|s| s.borrow().as_ref().is_some_and(|s| s.taskbar_created != 0 && msg == s.taskbar_created));
+    let restarted = STATE.with(|s| {
+        s.try_borrow().is_ok_and(|s| s.as_ref().is_some_and(|s| s.taskbar_created != 0 && msg == s.taskbar_created))
+    });
     if restarted {
         add_icon();
         return 0;

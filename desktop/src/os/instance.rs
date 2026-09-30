@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 /// Local only, next to the audio (47800) and discovery (47801) ports.
 const PORT: u16 = 47809;
 const ASK: &[u8] = b"SSND show\n";
+/// From the installer: close so the files can be replaced. Same length as
+/// `ASK`, so copies from before it read it whole and ignore it.
+const QUIT: &[u8] = b"SSND quit\n";
 const ANSWER: &[u8] = b"SSND ok\n";
 
 pub enum Claim {
@@ -24,7 +27,7 @@ pub enum Claim {
 /// Call once at start. `wait_for_old` is for the copy an update starts: the
 /// old copy is still quitting, so wait for its port instead of waking it.
 pub fn claim(wait_for_old: bool) -> Claim {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, PORT));
+    let addr = addr();
     let until = Instant::now() + Duration::from_secs(if wait_for_old { 10 } else { 0 });
     loop {
         if let Ok(l) = TcpListener::bind(addr) {
@@ -40,16 +43,45 @@ pub fn claim(wait_for_old: bool) -> Claim {
     }
     #[cfg(windows)]
     super::windows::let_other_copy_come_forward();
-    match ask_first_copy(addr) {
+    match ask_first_copy(addr, ASK) {
         Ok(true) => Claim::Second,
         _ => Claim::Unknown,
     }
 }
 
-fn ask_first_copy(addr: SocketAddr) -> std::io::Result<bool> {
+fn addr() -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::LOCALHOST, PORT))
+}
+
+/// Whether a copy of the app is running (holds the port).
+pub fn running() -> bool {
+    TcpListener::bind(addr()).is_err()
+}
+
+/// Ask the running copy, if any, to close, and wait up to `wait` for it to
+/// be gone. True when no copy is left running.
+pub fn ask_to_quit(wait: Duration) -> bool {
+    if !running() {
+        return true;
+    }
+    if !matches!(ask_first_copy(addr(), QUIT), Ok(true)) {
+        // A copy from before this request, or not the app at all.
+        return !running();
+    }
+    let until = Instant::now() + wait;
+    while Instant::now() < until {
+        if !running() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    !running()
+}
+
+fn ask_first_copy(addr: SocketAddr, ask: &[u8]) -> std::io::Result<bool> {
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
     s.set_read_timeout(Some(Duration::from_secs(1)))?;
-    s.write_all(ASK)?;
+    s.write_all(ask)?;
     let mut buf = [0u8; 16];
     let mut got = 0;
     while got < ANSWER.len() {
@@ -63,8 +95,9 @@ fn ask_first_copy(addr: SocketAddr) -> std::io::Result<bool> {
 }
 
 impl Claim {
-    /// Answer later copies in the background, calling `show` for each.
-    pub fn serve(self, show: impl Fn() + Send + 'static) {
+    /// Answer later copies in the background, calling `show` for each, and
+    /// `quit` when an installer needs the app closed.
+    pub fn serve(self, show: impl Fn() + Send + 'static, quit: impl Fn() + Send + 'static) {
         let Claim::First(listener) = self else { return };
         let _ = std::thread::Builder::new().name("ssnd-instance".into()).spawn(move || {
             for conn in listener.incoming() {
@@ -81,6 +114,9 @@ impl Claim {
                 if &buf[..got] == ASK {
                     show();
                     let _ = s.write_all(ANSWER);
+                } else if &buf[..got] == QUIT {
+                    let _ = s.write_all(ANSWER);
+                    quit();
                 }
             }
         });
@@ -99,10 +135,21 @@ mod tests {
         let Claim::First(l) = claim(false) else { return };
         let shown = Arc::new(AtomicUsize::new(0));
         let s = shown.clone();
-        Claim::First(l).serve(move || {
-            s.fetch_add(1, Ordering::Relaxed);
-        });
+        let quits = Arc::new(AtomicUsize::new(0));
+        let q = quits.clone();
+        Claim::First(l).serve(
+            move || {
+                s.fetch_add(1, Ordering::Relaxed);
+            },
+            move || {
+                q.fetch_add(1, Ordering::Relaxed);
+            },
+        );
         assert!(matches!(claim(false), Claim::Second));
+        assert_eq!(shown.load(Ordering::Relaxed), 1);
+        // The listener stays up in this test, so the copy "doesn't go".
+        assert!(!ask_to_quit(Duration::from_millis(300)));
+        assert_eq!(quits.load(Ordering::Relaxed), 1);
         assert_eq!(shown.load(Ordering::Relaxed), 1);
     }
 }

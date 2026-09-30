@@ -94,6 +94,9 @@ the bottom for ~3 s.
 5. "อัปเดต": version ("0.2", or "0.2.3 (เบต้า)" for a beta), status line,
    "ตรวจสอบอัปเดต", then the switch "รับเวอร์ชันเบต้าด้วย" (on by default).
    The update banner says "มีเวอร์ชันใหม่ v0.3" or "มีเวอร์ชันเบต้าใหม่ v0.3.1".
+   Desktop adds a last row: "ติดตั้งอยู่ที่ <folder>" with the link
+   "ถอนการติดตั้ง…", or for a copy run from a downloaded file "ยังไม่ได้ติดตั้งลงเครื่อง"
+   with "ติดตั้ง…" (Linux) or "ดาวน์โหลดตัวติดตั้ง" (Windows).
 6. Phone only: "ปิดแอปและหยุดทั้งหมด" (outlined, error-coloured text).
 
 Everything the user picks (targets, source, volume, mode, style, typed IPs,
@@ -136,3 +139,26 @@ and "ออก". Without a tray (e.g. GNOME without AppIndicator) closing quits.
 Opening the app again while it runs brings the running window forward. The
 window is kept inside the screen's work area (never under the taskbar) when
 it opens, comes back from the tray, or moves to a screen with other scaling.
+
+Any way of quitting (tray "ออก", "อัปเดตเลย", an installer closing the app, X
+without a tray) takes the window off the screen first, in the same frame,
+then shuts the sound down. On Windows the app then ends at once, since a
+hidden window gets no more frames.
+
+## Desktop installers
+
+- Windows: a standard setup (`StreamSound-windows-x64-setup.exe`, NSIS, Thai):
+  welcome, folder (default `C:\Program Files\Stream Sound`), shortcuts (desktop,
+  Start menu; remembered for next time), progress, then "เปิด Stream Sound"
+  ticked on the last page. It closes a running copy itself and registers
+  "Stream Sound" in Settings > Apps. The uninstaller is one page: what goes
+  (the app, and "การตั้งค่า" unticked), then progress. Thai wording for
+  uninstall is always "ถอนการติดตั้ง", never "ยกเลิกการติดตั้ง" (reads as cancel).
+- Linux: the downloaded file is its own installer, in the app's own look: a
+  window with the logo and version, a card with the folder (default
+  `~/.local/share/stream-sound`), a card of switches (desktop shortcut, app
+  menu entry, open when done), the red "ติดตั้ง" button and the link
+  "ใช้เลยโดยไม่ติดตั้ง". The menu entry's right-click has "ถอนการติดตั้ง Stream Sound".
+- Updates on both run the installer in update mode: no questions, just a small
+  window "กำลังอัปเดต Stream Sound / เป็นเวอร์ชัน X" with a progress bar, then the
+  new version opens by itself.

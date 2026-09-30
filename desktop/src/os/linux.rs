@@ -1,6 +1,6 @@
 //! Linux: a StatusNotifierItem tray icon (KDE, Xfce, Cinnamon, and GNOME
-//! with the AppIndicator extension), XDG autostart, and an entry in the
-//! desktop's app list so the icon shows in menus and docks.
+//! with the AppIndicator extension), XDG autostart, and the desktop-file
+//! helpers the installer (setup::linux) uses.
 
 use super::Waker;
 use ksni::blocking::TrayMethods;
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-const APP_ID: &str = "stream-sound";
+pub(crate) const APP_ID: &str = "stream-sound";
 
 struct Item {
     waker: Arc<OnceLock<Waker>>,
@@ -148,7 +148,7 @@ fn tray_icons() -> Vec<ksni::Icon> {
 
 /// An XDG folder variable, or `fallback` under $HOME. Empty or relative
 /// values count as unset, as the XDG spec says.
-fn xdg_dir(var: &str, fallback: &str) -> Option<PathBuf> {
+pub(crate) fn xdg_dir(var: &str, fallback: &str) -> Option<PathBuf> {
     let absolute = |p: PathBuf| p.is_absolute().then_some(p);
     std::env::var_os(var)
         .map(PathBuf::from)
@@ -156,11 +156,11 @@ fn xdg_dir(var: &str, fallback: &str) -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)).and_then(absolute))
 }
 
-fn config_dir() -> Option<PathBuf> {
+pub(crate) fn config_dir() -> Option<PathBuf> {
     xdg_dir("XDG_CONFIG_HOME", ".config")
 }
 
-fn data_dir() -> Option<PathBuf> {
+pub(crate) fn data_dir() -> Option<PathBuf> {
     xdg_dir("XDG_DATA_HOME", ".local/share")
 }
 
@@ -169,7 +169,7 @@ fn autostart_file() -> Option<PathBuf> {
 }
 
 /// Quote a path for a desktop file's Exec line (Desktop Entry spec).
-fn exec_arg(path: &str) -> String {
+pub(crate) fn exec_arg(path: &str) -> String {
     let mut q = String::from("\"");
     for c in path.chars() {
         match c {
@@ -186,20 +186,20 @@ fn exec_arg(path: &str) -> String {
     q.replace('\\', "\\\\")
 }
 
-fn desktop_entry(exec: &str, extra: &str) -> String {
+pub(crate) fn desktop_entry(exec: &str, extra: &str) -> String {
     format!(
         "[Desktop Entry]\nType=Application\nName=Stream Sound\nComment=ส่งและรับเสียงระหว่างเครื่องในวง LAN\n\
          Exec={exec}\nIcon={APP_ID}\nTerminal=false\nCategories=AudioVideo;Audio;\nStartupWMClass={APP_ID}\n{extra}"
     )
 }
 
-fn exe() -> Option<String> {
-    super::exe_path().map(|p| p.to_string_lossy().into_owned())
+fn exe() -> Option<PathBuf> {
+    super::exe_path()
 }
 
 /// Write only when different, so the desktop isn't told about a change
 /// on every start.
-fn write_if_changed(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_if_changed(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     if std::fs::read(path).ok().as_deref() == Some(data) {
         return Ok(());
     }
@@ -209,9 +209,9 @@ fn write_if_changed(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> 
     std::fs::write(path, data)
 }
 
-fn autostart_text() -> Option<String> {
-    let exec = format!("{} {}", exec_arg(&exe()?), super::MINIMIZED_FLAG);
-    Some(desktop_entry(&exec, "X-GNOME-Autostart-enabled=true\n"))
+fn autostart_text(exe: &std::path::Path) -> String {
+    let exec = format!("{} {}", exec_arg(&exe.to_string_lossy()), super::MINIMIZED_FLAG);
+    desktop_entry(&exec, "X-GNOME-Autostart-enabled=true\n")
 }
 
 pub fn autostart_enabled() -> bool {
@@ -224,10 +224,15 @@ pub fn autostart_enabled() -> bool {
 }
 
 pub fn set_autostart(on: bool) -> anyhow::Result<()> {
+    let exe = exe().ok_or_else(|| anyhow::anyhow!("can't find the app's file"))?;
+    set_autostart_for(&exe, on)
+}
+
+/// Start `exe` with the computer, or stop doing so.
+pub(crate) fn set_autostart_for(exe: &std::path::Path, on: bool) -> anyhow::Result<()> {
     let path = autostart_file().ok_or_else(|| anyhow::anyhow!("no home folder"))?;
     if on {
-        let text = autostart_text().ok_or_else(|| anyhow::anyhow!("can't find the app's file"))?;
-        write_if_changed(&path, text.as_bytes())?;
+        write_if_changed(&path, autostart_text(exe).as_bytes())?;
     } else if path.exists() {
         std::fs::remove_file(&path)?;
     }
@@ -235,18 +240,12 @@ pub fn set_autostart(on: bool) -> anyhow::Result<()> {
 }
 
 pub fn refresh_integration() {
-    // A build run from its source folder shouldn't add itself to the menu.
-    if cfg!(debug_assertions) {
-        return;
-    }
-    let (Some(data), Some(exe)) = (data_dir(), exe()) else { return };
-    let icon = data.join("icons/hicolor/256x256/apps").join(format!("{APP_ID}.png"));
-    let _ = write_if_changed(&icon, crate::gui::ICON_PNG);
-    let entry = data.join("applications").join(format!("{APP_ID}.desktop"));
-    let _ = write_if_changed(&entry, desktop_entry(&exec_arg(&exe), "").as_bytes());
+    // An installed copy keeps its menu entry and icon current (the files
+    // are written by the installer; see setup::linux).
+    crate::setup::linux::refresh();
     if autostart_enabled() {
-        if let (Some(p), Some(text)) = (autostart_file(), autostart_text()) {
-            let _ = write_if_changed(&p, text.as_bytes());
+        if let Some(exe) = exe() {
+            let _ = set_autostart_for(&exe, true);
         }
     }
 }
