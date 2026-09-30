@@ -66,8 +66,8 @@ struct LogoMark: View {
             .frame(width: size, height: size)
             .overlay(
                 HStack(alignment: .center, spacing: size * 0.07) {
-                    ForEach(Array(([0.36, 0.62, 0.86, 0.62, 0.36] as [CGFloat]).enumerated()), id: \.offset) { h in
-                        Capsule().fill(Color.white).frame(width: size * 0.09, height: size * 0.9 * h.element)
+                    ForEach(Array(([210, 420, 600, 360, 240] as [CGFloat]).enumerated()), id: \.offset) { h in
+                        Capsule().fill(Color.white).frame(width: size * 0.09, height: size * h.element / 1024)
                     }
                 }
             )

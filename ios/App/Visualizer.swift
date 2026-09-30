@@ -142,7 +142,7 @@ struct VolumeTube: View {
 struct Tube: View {
     @Binding var value: Double
     var level: Double
-    var height: CGFloat = 28
+    var height: CGFloat = 30
     var knobD: CGFloat = 22
 
     var body: some View {

@@ -106,7 +106,7 @@ struct ReceiveView: View {
         } label: {
             Image(systemName: v == 0 ? "speaker.slash.fill" : v < 0.6 ? "speaker.wave.1.fill" : "speaker.wave.3.fill")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(on ? Theme.red : v == 1 ? Theme.text2 : Theme.text)
+                .foregroundColor(v == 0 ? Theme.text3 : v == 1 ? Theme.text2 : Theme.redHi)
                 .frame(width: 32, height: 32)
                 .background(Theme.surface2, in: Circle())
         }
@@ -118,7 +118,7 @@ struct ReceiveView: View {
         let v = model.sourceVolume(s.from)
         return HStack(spacing: 10) {
             Tube(value: Binding(get: { model.sourceVolume(s.from) }, set: { model.setSourceVolume(s.from, $0) }),
-                 level: Double(s.level), height: 22, knobD: 20)
+                 level: Double(s.level), height: 26, knobD: 22)
                 .accessibilityLabel("ระดับเสียงของ \(s.name)")
             Text("\(Int((v * 100).rounded()))%")
                 .font(.system(size: 13, weight: .semibold).monospacedDigit())
