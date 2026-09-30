@@ -72,10 +72,12 @@ struct ReceiveView: View {
                     }
                     Spacer(minLength: 8)
                     speakerButton(s)
-                    Text("\(Int(delay(s).rounded())) ms")
+                    Text(Self.delayText(delay(s)))
                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
                         .foregroundColor(warn ? Theme.amber : Theme.green)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .lineLimit(1)
+                        .frame(width: 58) // fits "999 ms", so the pill never resizes
+                        .padding(.vertical, 5)
                         .background((warn ? Theme.amber : Theme.green).opacity(0.14), in: Capsule())
                 }
                 .contentShape(Rectangle())
@@ -126,6 +128,12 @@ struct ReceiveView: View {
                 .frame(width: 44, alignment: .trailing)
         }
         .padding(.leading, 50)
+    }
+
+    /// "32 ms" under a second, "1.2 s" from 1000 ms up.
+    static func delayText(_ ms: Double) -> String {
+        let r = ms.rounded()
+        return r < 1000 ? "\(Int(max(0, r))) ms" : String(format: "%.1f s", ms / 1000)
     }
 
     private func breakdown(_ s: StreamInfo) -> String {
