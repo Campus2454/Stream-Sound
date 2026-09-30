@@ -56,16 +56,19 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -346,6 +349,49 @@ fun Visualizer(style: VizStyle, height: Dp, data: (VizStyle, Int) -> FloatArray?
             }
             drawPath(down, C.Red, alpha = 0.3f)
         }
+    }
+}
+
+// ---- delay pill ---------------------------------------------------------------
+
+/** A delay for the delay pill: "32 ms", or seconds from 1000 ms ("1.2 s") so it always fits the pill. */
+fun delayText(ms: Double): String {
+    val v = if (ms.isFinite()) ms.coerceAtLeast(0.0) else 0.0
+    return when {
+        v.roundToInt() < 1000 -> "${v.roundToInt()} ms"
+        v < 99_950.0 -> String.format(Locale.ROOT, "%.1f s", v / 1000)
+        else -> "${(v / 1000).roundToInt()} s"
+    }
+}
+
+/** The widest text the delay pill is sized for. */
+private const val DELAY_TEXT_WIDEST = "888 ms"
+
+/** The delay pill turns amber from here: a lag you notice against a picture. */
+private const val DELAY_AMBER_MS = 150
+/** And red from here, seconds included: more than any mode's buffer holds when things work. */
+private const val DELAY_RED_MS = 500
+
+/** The delay pill's colour, by the number it shows. A stutter in the last 10 s turns a green pill amber. */
+fun delayColor(ms: Double, stutter: Boolean): Color {
+    val v = if (ms.isFinite()) ms.coerceAtLeast(0.0).roundToInt() else 0
+    return when {
+        v >= DELAY_RED_MS -> C.Error
+        v >= DELAY_AMBER_MS || stutter -> C.Amber
+        else -> C.Green
+    }
+}
+
+/** The delay in a pill of fixed width, so it and the speaker beside it don't move as the number changes. */
+@Composable
+fun DelayPill(ms: Double, color: Color) {
+    Box(
+        Modifier.clip(CircleShape).background(color.copy(alpha = 0.14f)).padding(horizontal = 10.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Invisible, only to set the width.
+        Text(DELAY_TEXT_WIDEST, color = Color.Transparent, fontSize = 13.sp, maxLines = 1, modifier = Modifier.clearAndSetSemantics {})
+        Text(delayText(ms), color = color, fontSize = 13.sp, maxLines = 1)
     }
 }
 

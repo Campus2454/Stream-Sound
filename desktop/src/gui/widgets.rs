@@ -48,6 +48,41 @@ pub fn hint(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(t(text)).size(12.5).color(TEXT2));
 }
 
+/// A delay for the delay pill: "32 ms", or seconds from 1000 ms ("1.2 s")
+/// so it always fits the pill's fixed width.
+pub fn delay_text(ms: f64) -> String {
+    let ms = if ms.is_finite() { ms.max(0.0) } else { 0.0 };
+    if ms.round() < 1000.0 {
+        format!("{ms:.0} ms")
+    } else if ms < 99_950.0 {
+        format!("{:.1} s", ms / 1000.0)
+    } else {
+        format!("{:.0} s", ms / 1000.0)
+    }
+}
+
+/// The widest text the delay pill is sized for.
+pub const DELAY_TEXT_WIDEST: &str = "888 ms";
+
+/// The delay pill turns amber from here: a lag you notice against a picture.
+pub const DELAY_AMBER_MS: f64 = 150.0;
+/// And red from here, seconds included: more than any mode's buffer holds
+/// when things work.
+pub const DELAY_RED_MS: f64 = 500.0;
+
+/// The delay pill's colour, by the number it shows. A stutter in the last
+/// 10 s turns a green pill amber.
+pub fn delay_color(ms: f64, stutter: bool) -> Color32 {
+    let ms = if ms.is_finite() { ms.max(0.0).round() } else { 0.0 };
+    if ms >= DELAY_RED_MS {
+        ERROR
+    } else if ms >= DELAY_AMBER_MS || stutter {
+        AMBER
+    } else {
+        GREEN
+    }
+}
+
 /// Status pill with an optional (pulsing) dot.
 pub fn pill(ui: &mut Ui, text: &str, color: Color32, dot: bool, pulse: bool) -> Response {
     let galley = ui.painter().layout_no_wrap(t(text), font(13.0), color);
@@ -513,6 +548,30 @@ pub fn link_button(ui: &mut Ui, text: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delay_switches_to_seconds_at_1000_ms() {
+        assert_eq!(delay_text(32.4), "32 ms");
+        assert_eq!(delay_text(999.4), "999 ms");
+        assert_eq!(delay_text(999.6), "1.0 s");
+        assert_eq!(delay_text(1234.0), "1.2 s");
+        assert_eq!(delay_text(12_345.0), "12.3 s");
+        assert_eq!(delay_text(123_456.0), "123 s");
+        assert_eq!(delay_text(-3.0), "0 ms");
+        assert_eq!(delay_text(f64::NAN), "0 ms");
+    }
+
+    #[test]
+    fn delay_colour_follows_the_number_shown() {
+        assert_eq!(delay_color(40.0, false), GREEN);
+        assert_eq!(delay_color(149.4, false), GREEN);
+        assert_eq!(delay_color(40.0, true), AMBER);
+        assert_eq!(delay_color(149.6, false), AMBER);
+        assert_eq!(delay_color(499.0, false), AMBER);
+        assert_eq!(delay_color(500.0, false), ERROR);
+        assert_eq!(delay_color(999.6, false), ERROR);
+        assert_eq!(delay_color(1234.0, true), ERROR);
+    }
 
     #[test]
     fn volume_slider_curve() {

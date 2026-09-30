@@ -18,8 +18,8 @@ red on near-black, content in three tabs.
 | `text2` | `#A3A3AD` | secondary text |
 | `text3` | `#6E6E78` | hints, disabled |
 | `green` | `#3DDC84` | live / connected / stable |
-| `amber` | `#FFB020` | some stutter, warnings |
-| `error` | `#FF6B6B` | errors |
+| `amber` | `#FFB020` | some stutter, warnings, delay 150–499 ms |
+| `error` | `#FF6B6B` | errors, delay 500 ms and up |
 
 Radii: cards 16, buttons 14, pills fully round. Spacing: 16 page padding,
 12 between cards, 8 inside rows.
@@ -65,8 +65,12 @@ the bottom for ~3 s.
    **volume tube**: speaker button (mute) + tube + percentage.
 2. "กำลังรับจาก": one row per incoming stream: name, sender IP, then a small
    speaker button for that device's own volume, then the delay pill. The pill
-   is only the number ("32 ms"), green when stable, amber after a stutter in
-   the last 10 s; no words. The speaker opens a small volume tube (same curve,
+   is only the number ("32 ms"), no words. From 1000 ms it shows seconds with
+   one decimal ("1.2 s"). Its width is fixed to fit "888 ms" with the text
+   centred, so neither the pill nor the speaker moves as the number changes.
+   Its colour goes by the number shown (rounded ms): `green` under 150 ms,
+   `amber` 150–499 ms, `error` red from 500 ms, so seconds are always red. A
+   stutter in the last 10 s turns a green pill amber (never changes red). The speaker opens a small volume tube (same curve,
    0–200 %) with the percentage: on hover on desktop (it stays while the
    pointer is on it and for 0.4 s after), on tap on phones. Clicking the
    desktop speaker mutes / unmutes that device. The speaker is redHi when the
