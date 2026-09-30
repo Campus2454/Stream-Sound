@@ -2,6 +2,7 @@
 name = "stream-sound"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 ssnd-core = { path = "../core" }
@@ -9,3 +10,26 @@ anyhow = "1"
 parking_lot = "0.12"
 ureq = "2"
 eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Tray icon over D-Bus, pure Rust (no GTK), so the binary still needs only glibc.
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+# Only to pick X11 when there is a tray: Wayland can't hide a window.
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+
+[build-dependencies]
+# Puts the icon and version details into the Windows .exe.
+winresource = { version = "0.1", default-features = false }

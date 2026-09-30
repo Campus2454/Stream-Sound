@@ -434,7 +434,7 @@ private fun ReceiveTab(m: UiModel, host: Host) {
             Gap(10.dp)
             val now = System.currentTimeMillis()
             e.streams.forEach { s ->
-                StreamRow(s, e.outputMs, m.recentStutter(s.id, now), m.expanded == s.id) {
+                StreamRow(m, host, s, e.outputMs, m.recentStutter(s.id, now), m.expanded == s.id) {
                     m.expanded = if (m.expanded == s.id) null else s.id
                 }
             }
@@ -484,7 +484,7 @@ private fun VolumeRow(m: UiModel, host: Host) {
             m.save()
         }
         Spacer(Modifier.width(10.dp))
-        VolumeTube(m.volume, 1.5f, if (m.muted) 0f else level, Modifier.weight(1f), onChange = {
+        VolumeTube(m.volume, if (m.muted) 0f else level, Modifier.weight(1f), onChange = {
             m.volume = it
             if (it > 0f) m.muted = false
             host.setVolume(m.effectiveVolume)
@@ -500,20 +500,59 @@ private fun VolumeRow(m: UiModel, host: Host) {
 }
 
 @Composable
-private fun StreamRow(s: StreamInfo, outMs: Double, stutter: Boolean, open: Boolean, onClick: () -> Unit) {
+private fun StreamRow(m: UiModel, host: Host, s: StreamInfo, outMs: Double, stutter: Boolean, open: Boolean, onClick: () -> Unit) {
     val total = s.captureMs + s.bufferMs + outMs
+    // Just the delay; its colour says whether it stuttered lately.
     val color = if (stutter) C.Amber else C.Green
+    val ip = s.from.substringBefore(':')
+    val vol = m.sourceVolume(ip)
+    val volumeOpen = m.volumeOpen == s.id
     val shape = RoundedCornerShape(12.dp)
     Column(Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(shape).background(if (open) C.Hover else C.Surface2).clickable(onClick = onClick)) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Avatar(s.name, false, ring = C.Green.copy(alpha = 0.25f + 0.75f * s.level.coerceIn(0f, 1f)))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(s.name, color = C.Text, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("จาก ${s.from.substringBefore(':')}", color = C.Text2, fontSize = 12.5.sp)
+                Text("จาก $ip", color = C.Text2, fontSize = 12.5.sp)
             }
+            // This device's own volume: tap to show its slider.
+            Box(
+                Modifier.size(34.dp).clip(CircleShape)
+                    .background(if (volumeOpen) C.Hover else Color.Transparent)
+                    .clickable { m.volumeOpen = if (volumeOpen) null else s.id },
+                contentAlignment = Alignment.Center,
+            ) {
+                val tint = when {
+                    vol == 0f -> C.Text3
+                    vol != 1f -> C.RedHi
+                    else -> C.Text2
+                }
+                GlyphIcon(if (vol == 0f) Glyph.Muted else Glyph.Speaker, tint, 18.dp)
+            }
+            Spacer(Modifier.width(6.dp))
             Box(Modifier.clip(CircleShape).background(color.copy(alpha = 0.14f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
-                Text(if (stutter) "${total.roundToInt()} ms · สะดุด" else "${total.roundToInt()} ms", color = color, fontSize = 13.sp)
+                Text("${total.roundToInt()} ms", color = color, fontSize = 13.sp)
+            }
+        }
+        if (volumeOpen) {
+            Row(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconCircle(if (vol == 0f) Glyph.Muted else Glyph.Speaker, 34.dp) {
+                    host.setSourceVolume(ip, m.toggleSourceMute(ip))
+                    m.save()
+                }
+                Spacer(Modifier.width(10.dp))
+                VolumeTube(vol, s.level, Modifier.weight(1f), height = 26.dp, onChange = {
+                    m.setSourceVolume(ip, it)
+                    host.setSourceVolume(ip, it)
+                }, onDone = { m.save() })
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    if (vol == 0f) "ปิด" else "${(vol * 100).roundToInt()}%",
+                    color = if (vol == 0f) C.Text3 else C.Text,
+                    fontSize = 14.sp,
+                    modifier = Modifier.width(44.dp),
+                )
             }
         }
         if (open) {

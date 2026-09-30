@@ -237,7 +237,8 @@ pub fn download(release: &Release, progress: impl Fn(u32)) -> anyhow::Result<Pat
 /// Swap the downloaded file in and start it. Only returns on failure.
 pub fn install_and_restart(new_file: &Path) -> anyhow::Result<()> {
     let exe = install(new_file)?;
-    std::process::Command::new(&exe).spawn()?;
+    // Tell the new copy to wait for this one to close rather than wake it.
+    std::process::Command::new(&exe).arg(crate::os::AFTER_UPDATE_FLAG).spawn()?;
     std::process::exit(0);
 }
 

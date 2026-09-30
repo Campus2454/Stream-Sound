@@ -27,7 +27,7 @@
          own capture, so relaying on one phone can't feed back. -->
     <application
         android:allowAudioPlaybackCapture="false"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:label="Stream Sound"
         android:theme="@android:style/Theme.Material.NoActionBar">
 

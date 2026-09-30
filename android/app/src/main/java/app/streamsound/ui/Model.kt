@@ -3,6 +3,7 @@ package app.streamsound.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
@@ -78,6 +79,8 @@ interface Host {
     fun setReceiving(on: Boolean)
     fun setPlayLocal(on: Boolean)
     fun setVolume(volume: Float)
+    /** Volume for one sending device, by its IP, 0..2. */
+    fun setSourceVolume(ip: String, volume: Float)
     fun setMode(id: String)
     fun rename(name: String)
     fun copy(text: String)
@@ -116,7 +119,17 @@ class UiModel(private val store: Store) {
     /** Typed-in addresses, normalised to "ip:port". */
     val manual = mutableStateListOf<String>().apply { addAll(store.strings("manual").mapNotNull { normalizeAddr(it) }.distinct().sorted()) }
 
-    var volume by mutableFloatStateOf(store.float("volume", 1f).coerceIn(0f, 1.5f))
+    var volume by mutableFloatStateOf(store.float("volume", 1f).coerceIn(0f, MAX_VOLUME))
+    /** Volume for each sending device by IP, 0..2; devices not listed play at 1. Saved as "ip volume". */
+    val sourceVolumes = mutableStateMapOf<String, Float>().apply {
+        for (e in store.strings("sourceVolumes")) {
+            val ip = e.substringBefore(' ')
+            val v = e.substringAfter(' ', "").toFloatOrNull() ?: continue
+            if (ip.isNotEmpty() && v.isFinite()) put(ip, v.coerceIn(0f, MAX_VOLUME))
+        }
+    }
+    /** Volume to go back to when a muted device is unmuted, by IP. */
+    private val sourceUnmute = HashMap<String, Float>()
     var muted by mutableStateOf(store.bool("muted", false))
     var latencyMode by mutableStateOf(store.string("latencyMode", "balanced"))
     var visual by mutableStateOf(if (store.string("visual", "bars") == "wave") VizStyle.Wave else VizStyle.Bars)
@@ -150,9 +163,28 @@ class UiModel(private val store: Store) {
                 "keepScreenOn" to keepScreenOn,
                 "autoReceive" to autoReceive,
                 "betaUpdates" to betaUpdates,
+                "sourceVolumes" to sourceVolumes.map { "${it.key} ${it.value}" }.toSet(),
             )
         )
     }
+
+    fun sourceVolume(ip: String): Float = sourceVolumes[ip] ?: 1f
+
+    fun setSourceVolume(ip: String, v: Float) {
+        val x = v.coerceIn(0f, MAX_VOLUME)
+        if (x > 0f) sourceUnmute[ip] = x
+        if (x == 1f) sourceVolumes.remove(ip) else sourceVolumes[ip] = x
+    }
+
+    /** Mute a device, or bring it back to the volume it had. */
+    fun toggleSourceMute(ip: String): Float {
+        val v = if (sourceVolume(ip) == 0f) sourceUnmute[ip] ?: 1f else 0f
+        setSourceVolume(ip, v)
+        return v
+    }
+
+    /** The stream row whose device volume slider is open. */
+    var volumeOpen by mutableStateOf<Long?>(null)
 
     fun saveName(name: String) = store.save(mapOf("name" to name))
 

@@ -825,13 +825,23 @@ pub struct Mixer {
     pub mode: Mode,
     pub volume: f32,
     pub muted: bool,
+    /// Extra volume per sending device, by its IP (`StreamEntry::from`);
+    /// devices not listed play at 1.0.
+    pub source_volume: HashMap<String, f32>,
     /// What is being played, for the visualizers.
     pub scope: crate::scope::Scope,
 }
 
 impl Mixer {
     pub fn new(mode: Mode) -> Self {
-        Mixer { streams: HashMap::new(), mode, volume: 1.0, muted: false, scope: Default::default() }
+        Mixer {
+            streams: HashMap::new(),
+            mode,
+            volume: 1.0,
+            muted: false,
+            source_volume: HashMap::new(),
+            scope: Default::default(),
+        }
     }
 
     pub fn render(&mut self, out: &mut [f32], out_rate: u32, out_ch: usize) {
@@ -841,7 +851,8 @@ impl Mixer {
         }
         let gain = if self.muted { 0.0 } else { self.volume };
         for s in self.streams.values_mut() {
-            s.buf.render_add(out, out_rate, out_ch, gain);
+            let own = self.source_volume.get(&s.from).copied().unwrap_or(1.0);
+            s.buf.render_add(out, out_rate, out_ch, gain * own);
         }
         for v in out.iter_mut() {
             *v = soft_clip(*v);
@@ -1176,5 +1187,38 @@ mod tests {
         b.render_add(&mut out, 48_000, 2, 1.0);
         assert_eq!(b.underruns, 0);
         assert!(out.iter().any(|v| v.abs() > 0.3));
+    }
+    #[test]
+    fn each_device_has_its_own_volume() {
+        // Two devices send a steady 0.2; the first is turned down to half,
+        // the second is unknown to `source_volume` and plays as sent.
+        let mut m = Mixer::new(Mode::Balanced);
+        for (id, ip) in [(1, "10.0.0.1"), (2, "10.0.0.2")] {
+            let buf = StreamBuffer::new(RATE, 2, Mode::Balanced);
+            m.streams.insert(id, StreamEntry { buf, name: ip.into(), from: ip.into() });
+        }
+        let p = vec![0.2f32; 240 * 2];
+        let mut seq = 0;
+        let mut out = vec![0.0f32; 480 * 2];
+        // Real time: two packets arrive for every block played.
+        let mut play = |m: &mut Mixer, blocks: usize| {
+            for _ in 0..blocks {
+                for _ in 0..2 {
+                    for s in m.streams.values_mut() {
+                        s.buf.push(seq, 0, &p);
+                    }
+                    seq += 1;
+                }
+                m.render(&mut out, RATE, 2);
+            }
+            out[out.len() - 1]
+        };
+        play(&mut m, 20);
+        m.source_volume.insert("10.0.0.1".into(), 0.5);
+        let v = play(&mut m, 4);
+        assert!((v - 0.3).abs() < 0.01, "0.2 * 0.5 + 0.2 = 0.3, got {v}");
+        m.source_volume.insert("10.0.0.2".into(), 0.0);
+        let v = play(&mut m, 4);
+        assert!((v - 0.1).abs() < 0.01, "second device muted, got {v}");
     }
 }
