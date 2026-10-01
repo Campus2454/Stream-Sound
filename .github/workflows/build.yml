@@ -107,7 +107,9 @@ jobs:
           $nsis = "${env:ProgramFiles(x86)}\NSIS"
           if (-not (Test-Path "$nsis\makensis.exe")) { choco install nsis -y --no-progress }
           New-Item -ItemType Directory -Force out/setup | Out-Null
-          & "$nsis\makensis.exe" -WX -V3 "-DVERSION=$env:SSND_VERSION" `
+          # The script is UTF-8 (with a BOM); without either, makensis reads it
+          # in the runner's ANSI code page and the Thai comes out garbled.
+          & "$nsis\makensis.exe" -WX -V3 -INPUTCHARSET UTF8 "-DVERSION=$env:SSND_VERSION" `
             "-DEXE=$PWD\out\StreamSound\StreamSound.exe" `
             "-DOUTFILE=$PWD\out\setup\StreamSound-windows-x64-setup.exe" `
             desktop\installer\windows.nsi
