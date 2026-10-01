@@ -1,4 +1,4 @@
-; Stream Sound setup for Windows, in Thai.
+﻿; Stream Sound setup for Windows, in Thai.
 ;
 ; Built by .github/workflows/build.yml:
 ;   makensis /DVERSION=1.2.3 /DEXE=<StreamSound.exe> /DOUTFILE=<setup.exe> windows.nsi
